@@ -1,0 +1,17 @@
+{
+  "name": "free-photos-remover",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Moves the photos in your Google Photos library to the trash in bulk. Free, no daily limit.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JasonKrijgsman/free-photos-remover.git"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

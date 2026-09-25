@@ -1,0 +1,12 @@
+# release output
+*.zip
+*.zip.sha256
+
+# dependencies (there are none, but keep a stray install out)
+node_modules/
+
+# editors and systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
