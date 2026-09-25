@@ -5,7 +5,10 @@
  * each photo checkbox sits next to exactly one link to the photo, day headers
  * carry their own select-all checkbox, only rows near the visible part are in
  * the DOM, a selection bar with the count and a trash button replaces the top
- * bar, and a dialog asks before anything moves to the trash.
+ * bar, and a dialog asks before anything moves to the trash. In Dutch that
+ * dialog asks "Verwijderen uit je Google-account...?" with the buttons
+ * "Annuleren" (action code IbE0S) and "Weggooien" (EBS5u). The English
+ * labels below are assumptions; only the Dutch ones were seen.
  *
  * It runs a list of scenarios against the real runner and DOM adapter and
  * writes the results into <pre id="result">.
@@ -18,13 +21,14 @@
     en: {
       clear: 'Clear selection', count: (n) => n + ' selected', share: 'Share', album: 'Add to album',
       trash: 'Move to trash', cancel: 'Cancel', confirm: 'Move to trash', title: 'Move to trash?',
-      search: 'Search your photos', settings: 'Settings'
+      search: 'Search your photos', settings: 'Settings', empty: 'Empty trash'
     },
     nl: {
       clear: 'Selectie wissen', count: (n) => n + ' geselecteerd', share: 'Delen',
       album: 'Maken of toevoegen aan album', trash: 'Naar prullenbak', cancel: 'Annuleren',
-      confirm: 'Naar prullenbak', title: 'Naar prullenbak verplaatsen?', search: "Je foto's doorzoeken",
-      settings: 'Instellingen'
+      confirm: 'Weggooien',
+      title: "Verwijderen uit je Google-account, apparaten waarop back-up aanstaat en plekken waar je ze hebt gedeeld binnen Google Foto's?",
+      search: "Je foto's doorzoeken", settings: 'Instellingen', empty: 'Prullenbak leegmaken'
     }
   };
   const COLS = 6;
@@ -48,11 +52,12 @@
   }
 
   function reset(options) {
-    if (fx && fx.dialog) fx.dialog.remove();
-    if (fx && fx.promoEl) fx.promoEl.remove();
+    document.querySelectorAll('[role="dialog"]').forEach((d) => d.remove());
     fx = Object.assign({
       total: 40, lang: 'en', askFirst: true, failTrash: false, extraOnFirstClick: 0, promo: false,
-      trashDelay: 150
+      trashDelay: 150, barDelay: 0, plainDialog: false, rtl: false, accountName: 'Test User',
+      emptyTrashButton: false, evilDialog: false, twoDialogs: false, noCount: false,
+      navigateAfterBatches: 0, path: '/'
     }, options);
     fx.photos = [];
     for (let i = 0; i < fx.total; i++) {
@@ -60,16 +65,15 @@
     }
     fx.selected = new Set();
     fx.dialog = null;
-    fx.promoEl = null;
-    fx.groupClicks = 0;
-    fx.decoyClicks = 0;
-    fx.trashClicks = 0;
-    fx.confirmClicks = 0;
-    fx.clicksByPhoto = {};
-    if (fx.promo) {
-      fx.promoEl = el('div', { role: 'dialog', 'aria-modal': 'true', class: 'dlg' }, 'Your storage is full');
-      document.body.appendChild(fx.promoEl);
-    }
+    fx.barHidden = false;
+    fx.barShown = false;
+    fx.batchesDone = 0;
+    Object.assign(fx, {
+      groupClicks: 0, decoyClicks: 0, trashClicks: 0, confirmClicks: 0, emptyClicks: 0, clearClicks: 0,
+      clicksByPhoto: {}
+    });
+    if (fx.promo) document.body.appendChild(el('div', { role: 'dialog', 'aria-modal': 'true', class: 'dlg' }, 'Your storage is full'));
+    topbar.dir = fx.rtl ? 'rtl' : 'ltr';
     main.scrollTop = 0;
     renderTop();
     renderGrid(true);
@@ -160,21 +164,32 @@
     const L = LABELS[fx.lang];
     topbar.replaceChildren();
     if (fx.selected.size) {
+      // With barDelay, the selection bar waits above the page before it slides
+      // in, like the real one in a tab that Chrome draws slowly.
+      if (fx.barDelay && !fx.barShown && !fx.barHidden) {
+        fx.barHidden = true;
+        setTimeout(() => { fx.barHidden = false; fx.barShown = true; renderTop(); }, fx.barDelay);
+      }
+      topbar.style.transform = fx.barHidden ? 'translateY(-200px)' : '';
       const spacer = el('div');
       spacer.style.flex = '1';
-      topbar.append(
-        button(L.clear, () => { fx.selected.clear(); renderTop(); }),
-        el('div', {}, L.count(fx.selected.size)),
+      const parts = [
+        button(L.clear, () => { fx.clearClicks++; fx.selected.clear(); renderTop(); }),
+        fx.noCount ? null : el('div', {}, L.count(fx.selected.size)),
         spacer,
         button(L.share, () => {}),
         button(L.album, () => {}),
+        fx.emptyTrashButton ? button(L.empty, () => { fx.emptyClicks++; }) : null,
         button(L.trash, onTrash)
-      );
+      ];
+      parts.forEach((p) => { if (p) topbar.appendChild(p); });
     } else {
+      topbar.style.transform = '';
+      fx.barShown = false;
       topbar.append(
         el('input', { placeholder: L.search }),
         button(L.settings, () => {}),
-        button('Google Account: Test User (someone@example.com)', () => {})
+        button('Google Account: ' + fx.accountName + ' (someone@example.com)', () => {})
       );
     }
   }
@@ -184,17 +199,24 @@
     if (!fx.askFirst) { moveSelectedToTrash(); return; }
     const L = LABELS[fx.lang];
     const d = el('div', { role: 'dialog', 'aria-modal': 'true', class: 'dlg' });
-    const cancel = el('button', {}, L.cancel);
+    const codes = !fx.plainDialog;
+    const cancel = el('button', codes ? { 'data-mdc-dialog-action': 'IbE0S' } : {}, L.cancel);
     cancel.addEventListener('click', closeDialog);
-    const ok = el('button', {}, L.confirm);
+    // evilDialog: a dialog whose accept button would empty the trash.
+    const okLabel = fx.evilDialog ? L.empty : L.confirm;
+    const ok = el('button', codes ? { 'data-mdc-dialog-action': 'EBS5u', 'data-mdc-dialog-initial-focus': '' } : {}, okLabel);
     ok.addEventListener('click', () => {
+      if (fx.evilDialog) { fx.emptyClicks++; closeDialog(); return; }
       fx.confirmClicks++;
       closeDialog();
       moveSelectedToTrash();
     });
-    d.append(el('h2', {}, L.title), el('p', {}, 'Items are removed from all your devices.'), cancel, ok);
+    d.append(el('h2', {}, L.title), cancel, ok);
     document.body.appendChild(d);
     fx.dialog = d;
+    if (fx.twoDialogs) {
+      document.body.appendChild(el('div', { role: 'dialog', 'aria-modal': 'true', class: 'dlg' }, 'Something else'));
+    }
   }
 
   function closeDialog() {
@@ -208,6 +230,9 @@
     setTimeout(() => {
       if (!fx.failTrash) fx.photos = fx.photos.filter((p) => !fx.selected.has(p.id));
       fx.selected.clear();
+      fx.batchesDone++;
+      // navigateAfterBatches: the user opens the Archive while the run goes on.
+      if (fx.navigateAfterBatches && fx.batchesDone >= fx.navigateAfterBatches) fx.path = '/archive';
       renderTop();
       renderGrid(true);
     }, fx.trashDelay);
@@ -223,14 +248,15 @@
 
   const FPR = window.FreePhotosRemover;
   const FAST = {
-    clickDelay: 1, settleDelay: 80, poll: 20, stepTimeout: 4000, trashTimeout: 6000, pauseBetweenBatches: 20
+    clickDelay: 1, settleDelay: 80, poll: 20, stepTimeout: 4000, barTimeout: 3000, trashTimeout: 6000,
+    emptyQuiet: 1000, pauseBetweenBatches: 20
   };
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   async function scenario(name, fixtureOptions, runOptions, expected) {
     reset(fixtureOptions);
     await wait(100);
-    const adapter = FPR.createDomAdapter(document, window, FPR.createStore(null), { path: runOptions.path || '/' });
+    const adapter = FPR.createDomAdapter(document, window, FPR.createStore(null), { path: () => fx.path });
     const runner = FPR.createRunner(adapter, Object.assign({ batchSize: runOptions.batchSize || 10 }, FAST));
     const before = fx.photos.length;
     let res = null;
@@ -254,6 +280,8 @@
       decoyClicks: fx.decoyClicks,
       trashClicks: fx.trashClicks,
       confirmClicks: fx.confirmClicks,
+      emptyClicks: fx.emptyClicks,
+      clearClicks: fx.clearClicks,
       doubleClicks: Object.values(fx.clicksByPhoto).filter((n) => n > 1).length
     };
     const problems = [];
@@ -262,6 +290,7 @@
     });
     if (out.groupClicks) problems.push('clicked a day checkbox');
     if (out.decoyClicks) problems.push('clicked a button outside the top bar');
+    if (out.emptyClicks) problems.push('clicked a button that empties the trash');
     if (out.doubleClicks) problems.push('clicked a photo twice');
     if (error && !expected.error) problems.push('error: ' + (error.stack || error));
     out.problems = problems;
@@ -271,30 +300,45 @@
 
   async function runAll() {
     const results = [];
-    results.push(await scenario('English, 25 of 60 in batches of 10', { total: 60 },
-      { limit: 25, batchSize: 10 },
-      { trashed: 25, removed: 25, reason: 'limit', error: null, selectedLeft: 0, dialogOpen: false }));
-    results.push(await scenario('English, all 120 in batches of 50 (scrolls inside a batch)', { total: 120 },
-      { batchSize: 50 },
-      { trashed: 120, removed: 120, remaining: 0, reason: 'empty', error: null }));
-    results.push(await scenario('Dutch, everything', { total: 30, lang: 'nl' },
-      { batchSize: 12 },
-      { trashed: 30, removed: 30, remaining: 0, reason: 'empty', error: null }));
-    results.push(await scenario('Google moves photos without asking', { total: 15, askFirst: false },
-      { batchSize: 50 },
-      { trashed: 15, removed: 15, reason: 'empty', confirmClicks: 0, error: null }));
-    results.push(await scenario('Google fails to remove the batch', { total: 20, failTrash: true },
-      { batchSize: 10 },
-      { error: 'not-removed', removed: 0, trashed: 0 }));
-    results.push(await scenario('Google selects more than planned', { total: 40, extraOnFirstClick: 5 },
-      { limit: 10, batchSize: 10 },
-      { error: 'too-many', removed: 0, trashClicks: 0, selectedLeft: 0 }));
-    results.push(await scenario('A single photo page is not supported', { total: 10 },
-      { path: '/photo/AF1Qip00001' },
-      { error: 'unsupported-page', trashClicks: 0, removed: 0 }));
-    results.push(await scenario('A Google pop-up is open', { total: 10, promo: true },
-      {},
-      { error: 'close-popup', trashClicks: 0, removed: 0 }));
+    const add = async (...args) => results.push(await scenario(...args));
+    await add('English, 25 of 60 in batches of 10', { total: 60 }, { limit: 25, batchSize: 10 },
+      { trashed: 25, removed: 25, reason: 'limit', error: null, selectedLeft: 0, dialogOpen: false });
+    await add('English, all 120 in batches of 50 (scrolls inside a batch)', { total: 120 }, { batchSize: 50 },
+      { trashed: 120, removed: 120, remaining: 0, reason: 'empty', error: null });
+    await add('Dutch, everything, with the real Weggooien dialog', { total: 30, lang: 'nl' }, { batchSize: 12 },
+      { trashed: 30, removed: 30, remaining: 0, reason: 'empty', error: null });
+    await add('The selection bar appears 1.5 s late', { total: 20, lang: 'nl', barDelay: 1500 }, { limit: 10 },
+      { trashed: 10, removed: 10, reason: 'limit', error: null });
+    await add('Right to left: moves the photos', { total: 30, rtl: true }, { limit: 10 },
+      { trashed: 10, removed: 10, reason: 'limit', error: null });
+    await add('Right to left: too many selected, clears with the right button', { total: 30, rtl: true, extraOnFirstClick: 5 },
+      { limit: 10 }, { error: 'too-many', removed: 0, trashClicks: 0, selectedLeft: 0, clearClicks: 1 });
+    await add('An account name with a trash word in it', { total: 20, accountName: 'Ahmad bin Ismail' }, { limit: 10 },
+      { trashed: 10, removed: 10, reason: 'limit', error: null });
+    await add('An Empty trash button in the bar is never touched', { total: 20, emptyTrashButton: true }, { limit: 10 },
+      { trashed: 10, removed: 10, reason: 'limit', error: null, emptyClicks: 0 });
+    await add('A dialog whose accept button empties the trash is cancelled', { total: 20, evilDialog: true },
+      { limit: 5 }, { error: 'no-confirm-button', removed: 0, emptyClicks: 0, dialogOpen: false, selectedLeft: 0 });
+    await add('Two dialogs at once: nothing is confirmed', { total: 20, twoDialogs: true }, { limit: 5 },
+      { error: 'unexpected-dialog', removed: 0, confirmClicks: 0 });
+    await add('No count in the selection bar: stops before the trash', { total: 20, noCount: true }, { limit: 5 },
+      { error: 'no-count', removed: 0, trashClicks: 0, selectedLeft: 0 });
+    await add('The user opens the Archive during the run', { total: 60, navigateAfterBatches: 1 }, { batchSize: 10 },
+      { error: 'page-changed', removed: 10, trashed: 10, trashClicks: 1 });
+    await add('A confirm button it cannot recognise: backs out', { total: 20, lang: 'nl', plainDialog: true },
+      { limit: 5 }, { error: 'no-confirm-button', removed: 0, confirmClicks: 0, dialogOpen: false, selectedLeft: 0 });
+    await add('English dialog without action codes: matches the trash label', { total: 20, plainDialog: true },
+      { limit: 5 }, { trashed: 5, removed: 5, reason: 'limit', error: null });
+    await add('Google fails to remove the batch', { total: 20, failTrash: true }, { batchSize: 10 },
+      { error: 'not-removed', removed: 0, trashed: 0 });
+    await add('Google selects more than planned', { total: 40, extraOnFirstClick: 5 }, { limit: 10 },
+      { error: 'too-many', removed: 0, trashClicks: 0, selectedLeft: 0 });
+    await add('A single photo page is not supported', { total: 10, path: '/photo/AF1Qip00001' }, {},
+      { error: 'unsupported-page', trashClicks: 0, removed: 0 });
+    await add('A Google pop-up is open', { total: 10, promo: true }, {},
+      { error: 'close-popup', trashClicks: 0, removed: 0 });
+    await add('Google moves photos without asking', { total: 15, askFirst: false }, { batchSize: 50 },
+      { trashed: 15, removed: 15, reason: 'empty', confirmClicks: 0, error: null });
     return results;
   }
 

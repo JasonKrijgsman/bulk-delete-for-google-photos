@@ -58,7 +58,7 @@ test('the runner passes every fixture scenario in headless Chrome',
       const results = JSON.parse(text);
       const failed = results.filter((r) => !r.ok);
       assert.deepEqual(failed, [], JSON.stringify(failed, null, 2));
-      assert.ok(results.length >= 8, 'ran ' + results.length + ' scenarios');
+      assert.ok(results.length >= 19, 'ran ' + results.length + ' scenarios');
     } finally {
       fs.rmSync(profile, { recursive: true, force: true });
     }

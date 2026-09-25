@@ -3,8 +3,8 @@
  *
  * Moves photos from your Google Photos Library or Archive to the trash in
  * bulk, free and without a daily limit. It clicks the same checkboxes and
- * buttons you would click yourself. It never empties the trash, sends nothing
- * anywhere and needs no browser permissions.
+ * buttons you would click yourself. It never empties the trash and sends
+ * nothing anywhere.
  *
  * Use it as a browser extension (see README.md), or paste this whole file into
  * the browser console on photos.google.com.
@@ -24,6 +24,14 @@
   // in the top 64 CSS pixels. Buttons lower on the page are never clicked.
   const TOP_BAR_HEIGHT = 72;
 
+  // Google marks the buttons of its dialogs with action codes that do not
+  // change with the language. In the trash dialog, seen on 25 Sep 2026,
+  // "Weggooien" (confirm) carries EBS5u and "Annuleren" (cancel) IbE0S.
+  const ACCEPT_ACTION = 'EBS5u';
+  const CANCEL_ACTION = 'IbE0S';
+
+  const EMAIL = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/;
+
   // The word for "trash" in the label of the trash button, per language.
   // A label learned from the user's own click always wins over this list.
   const TRASH_WORDS = new RegExp([
@@ -34,15 +42,31 @@
     'المهملات', 'ट्रैश', 'ถังขยะ', 'ゴミ箱', '휴지통', '回收站', '垃圾桶'
   ].join('|'), 'iu');
 
+  // Words for emptying the trash or deleting for good. A button whose label
+  // holds one of these is never clicked and never learned, whatever else
+  // matches. This is a second line: the tool only clicks at all while the
+  // page is the Library or the Archive, where these buttons do not exist.
+  const EMPTY_WORDS = new RegExp([
+    '\\bempty\\b', 'permanent', 'forever', 'leegmaken', 'definitief', 'leeren', 'endgültig',
+    'vider', 'définitiv', 'vaciar', 'buidar', 'definitiv', 'svuota', 'esvaziar', 'opróżnij',
+    'trwale', 'töm', 'tøm', 'tyhjennä', 'pysyvästi', 'vyprázdn', 'trvale', 'ürít', 'véglegesen',
+    'golește', 'isprazni', 'izprazni', 'trajno', 'boşalt', 'kalıcı', 'kosongkan', 'очист',
+    'навсегда', 'спорожн', 'назавжди', 'изпразн', 'άδειασ', 'οριστικ', 'רוקן', 'לצמיתות',
+    'إفراغ', 'نهائي', 'खाली', 'ล้าง', 'を空', '完全に削除', '비우기', '영구', '清空', '永久'
+  ].join('|'), 'iu');
+
   const MESSAGES = {
     'unsupported-page': 'Open your Photos library or your Archive first.',
+    'no-account': 'Could not see which Google account is signed in. Reload the page, then start again.',
     'close-popup': 'Close the Google Photos pop-up first, then start again.',
-    'page-changed': 'The page changed while it was running.',
-    'clear-failed': 'Could not clear the current selection. Clear it yourself and start again.',
-    'select-failed': 'Could not select any photos.',
+    'page-changed': 'The page or the account changed, so it stopped.',
+    'bad-limit': 'Enter a whole number, or leave the box empty for all.',
+    'clear-failed': 'Could not clear the current selection. Clear it yourself, then start again.',
+    'no-count': 'Could not read how many photos Google selected, so nothing from that batch was moved. Stopped to be safe.',
     'too-many': 'Google selected more photos than planned, so nothing from that batch was moved. Stopped to be safe.',
     'no-trash-button': 'Could not find the trash button.',
     'no-dialog': 'Google did not react to the trash button.',
+    'unexpected-dialog': 'More than one Google dialog opened, so nothing was confirmed. Check the page.',
     'no-confirm-button': 'Could not find the confirm button in the Google dialog. Nothing from that batch was moved.',
     'trash-timeout': 'Google took too long to move the photos. Check the page, then start again.',
     'not-removed': 'Google did not remove all photos from the last batch. Try again later.',
@@ -119,7 +143,9 @@
       settleDelay: 700,
       poll: 100,
       stepTimeout: 15000,
+      barTimeout: 8000,
       trashTimeout: 120000,
+      emptyQuiet: 5000,
       pauseBetweenBatches: 1000,
       maxIdleScrolls: 3,
       sleep: sleep,
@@ -130,6 +156,7 @@
 
     let stopRequested = false;
     let running = false;
+    let pin = null;
     const state = { trashed: 0, batches: 0, phase: 'idle' };
 
     function progress(phase) {
@@ -139,6 +166,7 @@
 
     // Polls check() until it returns something truthy, for at most timeout
     // ms. With stableFor, the value must hold that long without a break.
+    // Stop interrupts the wait unless ignoreStop is set.
     async function waitFor(check, timeout, stableFor, ignoreStop) {
       const tries = Math.max(1, Math.ceil(timeout / o.poll));
       const needed = Math.max(1, Math.ceil((stableFor || 0) / o.poll));
@@ -157,6 +185,23 @@
       return null;
     }
 
+    // Every click happens on the page and account the user confirmed.
+    function checkPlace() {
+      if (!adapter.samePlace(pin)) throw new RunError('page-changed');
+    }
+
+    // Chrome barely draws a hidden tab, so the page stops reacting. Wait.
+    async function waitWhileHidden() {
+      if (!adapter.isHidden()) return;
+      o.log('Paused: this tab is hidden. Keep it in front to continue.');
+      progress('paused');
+      while (adapter.isHidden()) {
+        if (stopRequested) throw new RunError('stopped');
+        await o.sleep(o.poll * 5);
+      }
+      o.log('Continuing.');
+    }
+
     async function clearSelection() {
       if (!adapter.inSelectionMode()) return;
       adapter.clearSelection(false);
@@ -171,6 +216,7 @@
     // checkboxes that sit next to exactly one photo link.
     async function selectBatch(want) {
       progress('selecting');
+      await waitWhileHidden();
       adapter.scrollToTop();
       await o.sleep(o.settleDelay);
       const ids = [];
@@ -178,7 +224,7 @@
       let idle = 0;
       let staleRounds = 0;
       while (ids.length < want && !stopRequested) {
-        if (!adapter.page().ok) throw new RunError('page-changed');
+        checkPlace();
         let added = 0;
         let stale = false;
         for (const tile of adapter.tiles()) {
@@ -213,36 +259,57 @@
 
     async function trashBatch(ids, want) {
       progress('checking');
-      await o.sleep(o.settleDelay);
-
-      // Safety check: Google's own count must not exceed what was planned.
-      const counted = adapter.selectionCount();
-      o.log('Ticked ' + ids.length + ' photos. Google shows ' +
-        (counted === null ? 'no count' : counted + ' selected') + '.');
-      if (counted !== null && counted > want) {
-        await clearSelection();
-        throw new RunError('too-many', { counted: counted, want: want });
+      let counted = null;
+      try {
+        await o.sleep(o.settleDelay);
+        await waitWhileHidden();
+        // The selection bar slides in. Give it a few seconds to arrive.
+        await waitFor(function () { return adapter.findTrashButton(); }, o.barTimeout);
+        counted = await waitFor(function () { return adapter.selectionCount(); }, o.barTimeout);
+        checkPlace();
+      } catch (err) {
+        if (err && err.code === 'stopped') await clearSelection();
+        throw err;
       }
-      const expected = counted !== null ? counted : ids.length;
-      if (expected <= 0) {
+
+      // Safety checks: Google's own count must be readable, and it may not
+      // exceed what was planned or what this batch ticked.
+      o.log('Ticked ' + ids.length + ' photos. Google shows ' +
+        (counted ? counted + ' selected' : 'no count') + '.');
+      if (!counted) {
         await clearSelection();
-        throw new RunError('select-failed');
+        throw new RunError('no-count');
+      }
+      if (counted > want || counted > ids.length) {
+        await clearSelection();
+        throw new RunError('too-many', { counted: counted, want: want, ticked: ids.length });
       }
 
       // Each batch starts at the top of the grid, so its first photos are the
       // ones shown at the top afterwards if Google did not remove them.
-      const probe = ids.slice(0, 12);
+      const probe = new Set(ids.slice(0, 12));
 
       progress('trashing');
+      if (stopRequested) {
+        await clearSelection();
+        throw new RunError('stopped');
+      }
       const before = adapter.dialogs();
       const trash = adapter.findTrashButton();
       let trashLabel = null;
       let taughtTrash = false;
       if (trash) {
         trashLabel = adapter.labelOf(trash);
-        adapter.click(trash);
+        checkPlace();
+        if (!adapter.click(trash)) throw new RunError('page-changed');
       } else if (o.teach) {
-        trashLabel = await o.teach('trash');
+        try {
+          trashLabel = await o.teach('trash', { place: pin });
+        } catch (err) {
+          await clearSelection();
+          throw err;
+        }
+        checkPlace();
         adapter.useLabel('trash', trashLabel);
         taughtTrash = true;
       } else {
@@ -250,16 +317,13 @@
         throw new RunError('no-trash-button');
       }
 
-      // Google either asks to confirm, or moves the photos straight away.
+      // From here on the batch is finished even when Stop is pressed, so
+      // the count stays true. Google either asks, or moves them straight away.
       let clearedPolls = 0;
       const outcome = await waitFor(function () {
         const fresh = adapter.dialogs().filter(function (d) { return before.indexOf(d) === -1; });
-        if (fresh.length) {
-          // If some other pop-up opened too, prefer the dialog that offers
-          // the trash button.
-          const best = fresh.find(function (d) { return adapter.findConfirmButton(d, trashLabel); });
-          return { dialog: best || fresh[fresh.length - 1] };
-        }
+        if (fresh.length > 1) return { many: true };
+        if (fresh.length === 1) return { dialog: fresh[0] };
         if (!adapter.inSelectionMode()) {
           clearedPolls++;
           if (clearedPolls * o.poll >= 1000) return { cleared: true };
@@ -267,47 +331,72 @@
           clearedPolls = 0;
         }
         return null;
-      }, o.stepTimeout);
+      }, o.stepTimeout, 0, true);
       if (!outcome) {
         await clearSelection();
         throw new RunError('no-dialog');
       }
+      if (outcome.many) throw new RunError('unexpected-dialog');
 
       let taughtConfirm = null;
       if (outcome.dialog) {
-        const confirm = adapter.findConfirmButton(outcome.dialog, trashLabel);
+        const dialog = outcome.dialog;
+        const confirm = adapter.findConfirmButton(dialog, trashLabel);
         if (confirm) {
+          checkPlace();
           o.log('Confirming with "' + adapter.labelOf(confirm) + '".');
-          adapter.click(confirm);
+          if (!adapter.click(confirm)) throw new RunError('page-changed');
         } else if (o.teach) {
-          taughtConfirm = await o.teach('confirm', { dialog: outcome.dialog });
+          try {
+            taughtConfirm = await o.teach('confirm', { dialog: dialog, place: pin });
+          } catch (err) {
+            adapter.cancelDialog(dialog);
+            await o.sleep(o.settleDelay);
+            await clearSelection();
+            throw err;
+          }
+          checkPlace();
         } else {
-          o.log('Dialog buttons: ' + adapter.buttonLabels(outcome.dialog).join(' | '));
-          adapter.pressEscape();
+          o.log('Dialog buttons: ' + adapter.buttonLabels(dialog).join(' | '));
+          adapter.cancelDialog(dialog);
           await o.sleep(o.settleDelay);
           await clearSelection();
           throw new RunError('no-confirm-button');
         }
         progress('waiting');
         const done = await waitFor(function () {
-          return !adapter.isOpen(outcome.dialog) && !adapter.inSelectionMode();
-        }, o.trashTimeout, 500);
+          return !adapter.isOpen(dialog) && !adapter.inSelectionMode();
+        }, o.trashTimeout, 500, true);
         if (!done) throw new RunError('trash-timeout');
       }
 
+      // Proof that they went: photos are shown again at the top, and none of
+      // them is from this batch. An empty grid counts only after a longer
+      // quiet spell, because a grid that is still loading is empty too.
       progress('verifying');
       adapter.scrollToTop();
       await o.sleep(o.settleDelay);
-      const gone = await waitFor(function () { return !adapter.anyPresent(probe); }, o.stepTimeout, 1000);
+      let emptyPolls = 0;
+      const gone = await waitFor(function () {
+        const shown = adapter.tiles();
+        if (!shown.length) {
+          emptyPolls++;
+          return emptyPolls * o.poll >= o.emptyQuiet && !adapter.inSelectionMode();
+        }
+        emptyPolls = 0;
+        return !shown.some(function (t) { return probe.has(t.id); });
+      }, o.stepTimeout + o.emptyQuiet, 1000, true);
       if (!gone) throw new RunError('not-removed');
       if (taughtTrash) adapter.remember('trash', trashLabel);
       if (taughtConfirm) adapter.remember('confirm', taughtConfirm);
-      return expected;
+      return counted;
     }
 
-    async function run(limit) {
+    // limit: Infinity for everything, or a positive whole number.
+    // expected: the place the user confirmed; the run refuses any other.
+    async function run(limit, expected) {
       if (running) throw new RunError('busy');
-      const max = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : Infinity;
+      if (!(limit === Infinity || (Number.isInteger(limit) && limit > 0))) throw new RunError('bad-limit');
       running = true;
       stopRequested = false;
       state.trashed = 0;
@@ -315,12 +404,16 @@
       try {
         const page = adapter.page();
         if (!page.ok) throw new RunError(page.reason || 'unsupported-page');
+        pin = adapter.place();
+        if (!pin.account) throw new RunError('no-account');
+        if (expected && !adapter.samePlace(expected)) throw new RunError('page-changed');
+        if (expected) pin = expected;
         if (adapter.modalOpen()) throw new RunError('close-popup');
         await clearSelection();
         let reason = 'limit';
-        while (state.trashed < max) {
+        while (state.trashed < limit) {
           if (stopRequested) { reason = 'stopped'; break; }
-          const want = Math.min(o.batchSize, max - state.trashed);
+          const want = Math.min(o.batchSize, limit - state.trashed);
           const ids = await selectBatch(want);
           if (stopRequested) { await clearSelection(); reason = 'stopped'; break; }
           if (ids.length === 0) { reason = 'empty'; break; }
@@ -329,7 +422,7 @@
           state.batches++;
           progress('batch-done');
           o.log('Batch ' + state.batches + ': moved ' + moved + ' photos, ' + state.trashed + ' in total.');
-          if (state.trashed < max && !stopRequested) await o.sleep(o.pauseBetweenBatches);
+          if (state.trashed < limit && !stopRequested) await o.sleep(o.pauseBetweenBatches);
         }
         progress('done');
         return { trashed: state.trashed, batches: state.batches, reason: reason };
@@ -374,11 +467,20 @@
       return r.bottom > 0 && r.right > 0 && r.top < win.innerHeight && r.left < win.innerWidth;
     }
 
+    function inTopBar(el) {
+      const r = el.getBoundingClientRect();
+      return r.top >= -4 && r.bottom <= TOP_BAR_HEIGHT;
+    }
+
     function labelOf(el) {
       if (!el) return '';
       const raw = el.getAttribute('aria-label') || el.getAttribute('title') ||
         (typeof el.innerText === 'string' ? el.innerText : el.textContent) || '';
       return raw.replace(/\s+/g, ' ').trim();
+    }
+
+    function forbidden(label) {
+      return EMPTY_WORDS.test(label);
     }
 
     function buttonsIn(scope) {
@@ -387,31 +489,54 @@
     }
 
     function topButtons() {
-      return buttonsIn(doc).filter(function (b) {
-        if (!visible(b)) return false;
-        const r = b.getBoundingClientRect();
-        return r.top >= -4 && r.bottom <= TOP_BAR_HEIGHT;
-      });
+      return buttonsIn(doc).filter(function (b) { return visible(b) && inTopBar(b); });
     }
 
     function learned(kind) {
       return session[kind] || store.get(kind + 'Label');
     }
 
+    function currentPath() {
+      if (typeof opt.path === 'function') return opt.path();
+      return opt.path !== null ? opt.path : win.location.pathname;
+    }
+
     function page() {
-      const path = opt.path !== null ? opt.path : win.location.pathname;
-      const match = /^\/(?:u\/\d+\/?)?(?:(archive)\/?)?$/.exec(path);
+      const match = /^\/(?:u\/\d+\/?)?(?:(archive)\/?)?$/.exec(currentPath());
       if (!match) return { ok: false, reason: 'unsupported-page' };
       return { ok: true, kind: match[1] ? 'archive' : 'library' };
     }
 
+    // The signed-in account, from the account button in the top bar. Other
+    // "@" labels on the page only count when that button is not drawn.
     function account() {
       const nodes = doc.querySelectorAll('[aria-label*="@"]');
+      let fallback = null;
       for (let i = 0; i < nodes.length; i++) {
-        const match = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.exec(nodes[i].getAttribute('aria-label'));
-        if (match) return match[0];
+        if (isPanel(nodes[i])) continue;
+        const match = EMAIL.exec(nodes[i].getAttribute('aria-label'));
+        if (!match) continue;
+        if (visible(nodes[i]) && inTopBar(nodes[i])) return match[0];
+        if (!fallback) fallback = match[0];
       }
-      return null;
+      return fallback;
+    }
+
+    function place() {
+      const info = page();
+      return { ok: info.ok, kind: info.kind || null, path: currentPath(), account: account() };
+    }
+
+    // Same page, same path and, when the account can be seen, same account.
+    function samePlace(pinned) {
+      if (!pinned) return false;
+      const now = place();
+      if (!now.ok || now.path !== pinned.path) return false;
+      return !now.account || !pinned.account || now.account === pinned.account;
+    }
+
+    function isHidden() {
+      return doc.visibilityState === 'hidden';
     }
 
     // Google keeps earlier pages in the DOM, hidden. Only the visible main
@@ -451,9 +576,12 @@
       return tiles().some(function (t) { return wanted.has(t.id); });
     }
 
-    // Returns false when the element is no longer on the page.
+    // The one way this tool clicks anything on the page. It refuses unless
+    // the page is the Library or the Archive, and it never clicks a button
+    // that empties the trash or deletes for good.
     function click(el) {
-      if (!el || !el.isConnected) return false;
+      if (!el || !el.isConnected || !page().ok) return false;
+      if (el.getAttribute('role') !== 'checkbox' && forbidden(labelOf(el))) return false;
       el.click();
       return true;
     }
@@ -469,45 +597,103 @@
       return s.scrollTop > before;
     }
 
+    // Account buttons carry the email address and a person's name, which can
+    // hold a trash word ("bin"), so labels with "@" never count.
+    function trashCandidate(label) {
+      return label.indexOf('@') === -1 && !forbidden(label);
+    }
+
     function findTrashButton() {
-      const buttons = topButtons();
+      const buttons = topButtons().filter(function (b) { return trashCandidate(labelOf(b)); });
       const known = learned('trash');
       if (known) {
-        const hit = buttons.find(function (b) { return labelOf(b) === known; });
-        if (hit) return hit;
+        const hit = buttons.filter(function (b) { return labelOf(b) === known; });
+        if (hit.length === 1) return hit[0];
       }
       const hits = buttons.filter(function (b) { return TRASH_WORDS.test(labelOf(b)); });
       return hits.length === 1 ? hits[0] : null;
     }
 
-    function inSelectionMode() {
-      return !!findTrashButton();
+    // The containers that make up the top bar: for each top-bar button, its
+    // highest ancestor that still fits inside the bar.
+    function topBars() {
+      const bars = [];
+      topButtons().forEach(function (b) {
+        let el = b;
+        while (el.parentElement && el.parentElement !== doc.body) {
+          const r = el.parentElement.getBoundingClientRect();
+          if (r.bottom > TOP_BAR_HEIGHT + 8 || r.height > TOP_BAR_HEIGHT + 8) break;
+          el = el.parentElement;
+        }
+        if (bars.indexOf(el) === -1) bars.push(el);
+      });
+      return bars;
     }
 
-    // Reads "N selected" from the selection bar: the first short text with a
-    // number in the top bar, left of the trash button.
-    function selectionCount() {
-      const trash = findTrashButton();
-      if (!trash) return null;
-      const limitX = trash.getBoundingClientRect().left;
-      let scope = trash;
-      while (scope.parentElement && scope.parentElement !== doc.body) {
-        scope = scope.parentElement;
-        const r = scope.getBoundingClientRect();
-        if (r.left <= 120 || r.bottom > TOP_BAR_HEIGHT + 8) break;
-      }
-      const nodes = scope.querySelectorAll('span, div, h1, h2, h3, p');
-      for (let i = 0; i < nodes.length; i++) {
-        const el = nodes[i];
-        if (el.children.length || isPanel(el)) continue;
-        const text = (el.textContent || '').trim();
-        if (!text || text.length > 40 || !/\d/.test(text) || !visible(el)) continue;
-        const r = el.getBoundingClientRect();
-        if (r.bottom > TOP_BAR_HEIGHT || r.left >= limitX) continue;
-        const n = parseCount(text);
-        if (n !== null) return n;
+    // The "N selected" text: a short text with a number in the top bar that
+    // is not part of a button. It works the same left to right and right to
+    // left, and it does not need the trash button.
+    function countElement() {
+      const bars = topBars();
+      for (let b = 0; b < bars.length; b++) {
+        const nodes = bars[b].querySelectorAll('span, div, h1, h2, h3, p');
+        for (let i = 0; i < nodes.length; i++) {
+          const el = nodes[i];
+          if (el.children.length || isPanel(el)) continue;
+          if (el.closest('button, [role="button"], a, input')) continue;
+          const text = (el.textContent || '').trim();
+          if (!text || text.length > 40 || !/\d/.test(text)) continue;
+          if (!visible(el) || !inTopBar(el)) continue;
+          const n = parseCount(text);
+          if (n !== null) return { el: el, n: n };
+        }
       }
       return null;
+    }
+
+    function selectionCount() {
+      const found = countElement();
+      return found ? found.n : null;
+    }
+
+    function inSelectionMode() {
+      return !!findTrashButton() || (selectionCount() || 0) > 0;
+    }
+
+    // "Clear selection" is the top-bar button right next to the count, on
+    // either side, so it does not matter which way the language reads.
+    function clearButton() {
+      const found = countElement();
+      if (!found) return null;
+      const trash = findTrashButton();
+      const c = found.el.getBoundingClientRect();
+      let best = null;
+      let bestGap = 120;
+      topButtons().forEach(function (b) {
+        const label = labelOf(b);
+        if (b === trash || TRASH_WORDS.test(label) || !trashCandidate(label)) return;
+        const r = b.getBoundingClientRect();
+        const gap = Math.max(r.left - c.right, c.left - r.right, 0);
+        if (gap < bestGap) { best = b; bestGap = gap; }
+      });
+      return best;
+    }
+
+    function pressEscape() {
+      const target = doc.activeElement && !isPanel(doc.activeElement) ? doc.activeElement : doc.body;
+      ['keydown', 'keyup'].forEach(function (type) {
+        target.dispatchEvent(new win.KeyboardEvent(type, {
+          key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
+        }));
+      });
+    }
+
+    function clearSelection(useEscape) {
+      if (!useEscape) {
+        const button = clearButton();
+        if (button && click(button)) return;
+      }
+      pressEscape();
     }
 
     function dialogs() {
@@ -527,49 +713,43 @@
       return onScreen(dialog);
     }
 
-    // The confirm button carries the same label as the trash button in every
-    // language seen so far. Cancel never matches.
+    // Google's accept code finds the confirm button in any language. A label
+    // learned from the user, or the same label as the trash button, is the
+    // fallback. Cancel and anything that empties the trash never qualify.
     function findConfirmButton(dialog, trashLabel) {
-      const buttons = buttonsIn(dialog).filter(visible);
+      const buttons = buttonsIn(dialog).filter(function (b) {
+        return visible(b) && !forbidden(labelOf(b)) &&
+          b.getAttribute('data-mdc-dialog-action') !== CANCEL_ACTION;
+      });
+      const accept = buttons.filter(function (b) {
+        return b.getAttribute('data-mdc-dialog-action') === ACCEPT_ACTION;
+      });
+      if (accept.length === 1) return accept[0];
       const known = learned('confirm');
       if (known) {
-        const hit = buttons.find(function (b) { return labelOf(b) === known; });
-        if (hit) return hit;
+        const hit = buttons.filter(function (b) { return labelOf(b) === known; });
+        if (hit.length === 1) return hit[0];
       }
       const want = String(trashLabel || '').toLowerCase();
       if (want) {
         const same = buttons.filter(function (b) { return labelOf(b).toLowerCase() === want; });
         if (same.length === 1) return same[0];
       }
-      const hits = buttons.filter(function (b) { return TRASH_WORDS.test(labelOf(b)); });
-      return hits.length === 1 ? hits[0] : null;
+      return null;
     }
 
     function buttonLabels(dialog) {
       return buttonsIn(dialog).filter(visible).map(labelOf);
     }
 
-    function pressEscape() {
-      const target = doc.activeElement && !isPanel(doc.activeElement) ? doc.activeElement : doc.body;
-      ['keydown', 'keyup'].forEach(function (type) {
-        target.dispatchEvent(new win.KeyboardEvent(type, {
-          key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
-        }));
+    // Backs out of a dialog without confirming: Google's own Cancel button
+    // when it is there, otherwise the Escape key.
+    function cancelDialog(dialog) {
+      const cancel = buttonsIn(dialog).filter(visible).filter(function (b) {
+        return b.getAttribute('data-mdc-dialog-action') === CANCEL_ACTION;
       });
-    }
-
-    // In selection mode the leftmost top-bar button is "Clear selection".
-    function clearSelection(useEscape) {
-      if (!useEscape) {
-        const buttons = topButtons().sort(function (a, b) {
-          return a.getBoundingClientRect().left - b.getBoundingClientRect().left;
-        });
-        if (buttons.length) {
-          buttons[0].click();
-          return;
-        }
-      }
-      pressEscape();
+      if (cancel.length === 1) cancel[0].click();
+      else pressEscape();
     }
 
     function useLabel(kind, label) {
@@ -594,7 +774,10 @@
 
     return {
       page: page,
+      place: place,
+      samePlace: samePlace,
       account: account,
+      isHidden: isHidden,
       modalOpen: modalOpen,
       tiles: tiles,
       anyPresent: anyPresent,
@@ -608,7 +791,10 @@
       isOpen: isOpen,
       findConfirmButton: findConfirmButton,
       buttonLabels: buttonLabels,
+      cancelDialog: cancelDialog,
       labelOf: labelOf,
+      forbidden: forbidden,
+      inTopBar: inTopBar,
       pressEscape: pressEscape,
       clearSelection: clearSelection,
       useLabel: useLabel,
@@ -641,7 +827,7 @@
     panel: {
       position: 'fixed', right: '20px', bottom: '20px', zIndex: '2147483000',
       font: '13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-      color: '#e8eaed', textAlign: 'left'
+      color: '#e8eaed', textAlign: 'left', direction: 'ltr'
     },
     card: {
       width: '320px', boxSizing: 'border-box', padding: '14px 16px', background: '#202124',
@@ -693,6 +879,7 @@
     trashing: 'Moving to the trash',
     waiting: 'Waiting for Google',
     verifying: 'Checking that they are gone',
+    paused: 'Paused while this tab is hidden. Keep it in front',
     'batch-done': 'Next batch',
     done: 'Done',
     error: 'Stopped'
@@ -707,12 +894,14 @@
     let inputError = '';
     let result = null;
     let runner = null;
+    let confirmedPlace = null;
     let pendingTeach = null;
     let teachText = '';
     let progressText = '';
     const logLines = [];
     let logEl = null;
     let progressEl = null;
+    let lastSignature = '';
 
     const panel = h(doc, 'div', { id: PANEL_ID, style: STYLE.panel });
     const pill = h(doc, 'button', { type: 'button', style: STYLE.pill, text: 'Photos Remover' });
@@ -752,35 +941,62 @@
       return info.ok && info.kind === 'archive' ? 'Archive' : 'Library';
     }
 
+    function fail(code) {
+      result = { ok: false, trashed: 0, reason: code, message: MESSAGES[code] };
+      view = 'error';
+      render();
+    }
+
+    // Asks the user to click a button once. Only a real click counts, only
+    // on the page that was confirmed, and never on a button that empties the
+    // trash. The trash button must sit in the top bar, the confirm button in
+    // the dialog. A click on the dialog's Cancel stops the run.
     function teach(kind, ctx) {
       return new Promise(function (resolve, reject) {
         teachText = kind === 'trash'
           ? 'I cannot find the trash button in this language. Click the trash button in the top bar of Google Photos once. I will remember it.'
           : 'I cannot find the confirm button. Click the button in the Google dialog that moves the photos to the trash. I will remember it.';
         render();
-        function onClick(event) {
-          const target = event.target && event.target.closest ? event.target.closest('button, [role="button"]') : null;
-          if (!target || panel.contains(target)) return;
-          if (kind === 'confirm' && ctx && ctx.dialog && !ctx.dialog.contains(target)) return;
+        function finish() {
           doc.removeEventListener('click', onClick, true);
           pendingTeach = null;
           teachText = '';
+        }
+        function onClick(event) {
+          if (!event.isTrusted) return;
+          const target = event.target && event.target.closest ? event.target.closest('button, [role="button"]') : null;
+          if (!target || panel.contains(target)) return;
+          if (ctx && ctx.place && !adapter.samePlace(ctx.place)) return;
           const label = adapter.labelOf(target);
+          if (kind === 'confirm') {
+            if (!ctx || !ctx.dialog || !ctx.dialog.contains(target)) return;
+            if (target.getAttribute('data-mdc-dialog-action') === CANCEL_ACTION) {
+              finish();
+              render();
+              reject(new RunError('stopped'));
+              return;
+            }
+          } else if (!adapter.inTopBar(target) || label.indexOf('@') !== -1) {
+            return;
+          }
+          if (!label || adapter.forbidden(label)) return;
+          finish();
           log('Learned the ' + kind + ' button: "' + label + '".');
           render();
           resolve(label);
         }
         doc.addEventListener('click', onClick, true);
         pendingTeach = function () {
-          doc.removeEventListener('click', onClick, true);
-          pendingTeach = null;
-          teachText = '';
+          finish();
           reject(new RunError('stopped'));
         };
       });
     }
 
     function start() {
+      const limit = parseLimit(limitValue);
+      if (limit === null) { fail('bad-limit'); return; }
+      if (!confirmedPlace || !adapter.samePlace(confirmedPlace)) { fail('page-changed'); return; }
       view = 'running';
       result = null;
       progressText = 'Starting';
@@ -794,15 +1010,18 @@
           if (progressEl) progressEl.textContent = progressText;
         }
       });
-      const limit = parseLimit(limitValue);
-      log('Started: ' + (limit === Infinity ? 'all photos' : limit + ' photos') + ' in the ' + where() + '.');
-      runner.run(limit).then(function (res) {
+      log('Started: ' + (limit === Infinity ? 'all photos' : limit + ' photos') + ' in the ' + where() +
+        ' of ' + confirmedPlace.account + '.');
+      runner.run(limit, confirmedPlace).then(function (res) {
         result = { ok: true, trashed: res.trashed, reason: res.reason };
         view = 'done';
         render();
       }, function (err) {
         const code = err && err.code ? err.code : 'unknown';
-        result = { ok: code === 'stopped', trashed: err && err.trashed ? err.trashed : 0, reason: code, message: err && err.message };
+        result = {
+          ok: code === 'stopped', trashed: err && err.trashed ? err.trashed : 0, reason: code,
+          message: err && err.message
+        };
         view = code === 'stopped' ? 'done' : 'error';
         if (code !== 'stopped') log('Error: ' + (err && err.message ? err.message : String(err)));
         render();
@@ -846,8 +1065,10 @@
       ];
 
       if (view === 'idle') {
+        // A text box, not a number box: a number box reports "5-" as empty,
+        // and empty means all.
         const input = h(doc, 'input', {
-          type: 'number', min: '1', step: '1', placeholder: 'all', inputmode: 'numeric',
+          type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: 'all',
           'aria-label': 'How many photos', style: STYLE.input
         });
         input.value = limitValue;
@@ -858,10 +1079,12 @@
           h(doc, 'p', { style: STYLE.hint, text: 'Leave empty to move all of them.' }),
           h(doc, 'div', { style: STYLE.buttons }, [
             button('Move to trash', STYLE.primary, function () {
-              if (parseLimit(limitValue) === null) { inputError = 'Enter a whole number, or leave it empty for all.'; render(); return; }
-              if (!adapter.page().ok) { result = { ok: false, reason: 'unsupported-page', message: MESSAGES['unsupported-page'] }; view = 'error'; render(); return; }
-              if (adapter.modalOpen()) { result = { ok: false, reason: 'close-popup', message: MESSAGES['close-popup'] }; view = 'error'; render(); return; }
+              if (parseLimit(limitValue) === null) { inputError = MESSAGES['bad-limit']; render(); return; }
               inputError = '';
+              if (!adapter.page().ok) { fail('unsupported-page'); return; }
+              if (!adapter.account()) { fail('no-account'); return; }
+              if (adapter.modalOpen()) { fail('close-popup'); return; }
+              confirmedPlace = adapter.place();
               view = 'confirm';
               render();
             }, !info.ok)
@@ -875,8 +1098,8 @@
         const limit = parseLimit(limitValue);
         const what = limit === Infinity ? 'ALL photos' : limit + ' photo' + (limit === 1 ? '' : 's');
         parts.push(
-          h(doc, 'p', { style: STYLE.message, text: 'Move ' + what + ' from the ' + where() + ' of ' + (email || 'this account') + ' to the trash?' }),
-          h(doc, 'p', { style: STYLE.hint, text: 'You can restore them from the trash for 60 days. Keep this tab open while it runs.' }),
+          h(doc, 'p', { style: STYLE.message, text: 'Move ' + what + ' from the ' + where() + ' of ' + confirmedPlace.account + ' to the trash?' }),
+          h(doc, 'p', { style: STYLE.hint, text: 'You can restore them from the trash for 60 days. Keep this tab open and in front while it runs.' }),
           h(doc, 'div', { style: STYLE.buttons }, [
             button('Yes, move them', STYLE.primary, start),
             button('Cancel', STYLE.secondary, function () { view = 'idle'; render(); })
@@ -896,7 +1119,9 @@
       if (view === 'done' || view === 'error') {
         const moved = result && result.trashed ? result.trashed : 0;
         let text = 'Moved ' + moved + ' photo' + (moved === 1 ? '' : 's') + ' to the trash.';
-        if (result && result.reason === 'empty') text += ' Nothing is left in your ' + where() + '.';
+        if (result && result.reason === 'empty') {
+          text = moved ? text + ' Nothing is left in your ' + where() + '.' : 'Found no photos to move here.';
+        }
         if (result && result.reason === 'stopped') text = 'Stopped. ' + text;
         if (view === 'error') {
           parts.push(h(doc, 'p', { style: STYLE.error, text: (result && result.message) || 'Something went wrong.' }));
@@ -932,7 +1157,13 @@
       return parts;
     }
 
+    function signature() {
+      const info = adapter.page();
+      return (adapter.account() || '') + '|' + (info.ok ? info.kind : 'none') + '|' + win.location.pathname;
+    }
+
     function render() {
+      lastSignature = signature();
       const collapsed = store.get('collapsed') === '1' && view !== 'running' && view !== 'confirm';
       pill.style.display = collapsed ? 'inline-block' : 'none';
       card.style.display = collapsed ? 'none' : 'block';
@@ -948,20 +1179,29 @@
     }
 
     render();
-    // Google Photos changes pages without reloading. Keep the account and
-    // page lines current while idle, but never while someone is typing.
+    // Google Photos changes pages without reloading. Redraw when the account
+    // or the page changes, and only then: a redraw replaces the buttons, and
+    // a click that lands during one would be lost. A change while the user
+    // is confirming cancels the confirmation, so it is always asked again.
     win.setInterval(function () {
-      if (view !== 'idle') return;
+      if (view !== 'idle' && view !== 'confirm') return;
+      if (signature() === lastSignature) return;
+      if (view === 'confirm') {
+        view = 'idle';
+        render();
+        return;
+      }
       if (doc.activeElement && panel.contains(doc.activeElement)) return;
       if (store.get('collapsed') === '1') return;
       render();
-    }, 2000);
+    }, 1000);
     return { panel: panel, adapter: adapter };
   }
 
   const api = {
     VERSION: VERSION,
     TRASH_WORDS: TRASH_WORDS,
+    EMPTY_WORDS: EMPTY_WORDS,
     MESSAGES: MESSAGES,
     RunError: RunError,
     parseCount: parseCount,

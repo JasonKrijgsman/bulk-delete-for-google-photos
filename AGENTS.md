@@ -13,6 +13,9 @@ A browser extension, also usable as a console script, that moves photos from a G
 - Find Google's elements by structure, position and labels learned from the user. Never depend on the class names Google generates; they change without notice.
 - Never build HTML from strings. photos.google.com enforces Trusted Types. A test checks the source for these calls.
 - Click buttons only in the top bar or in the confirm dialog. Never click the select-all checkbox of a day.
+- Every click goes through `click()` in the page adapter. It refuses off the Library and the Archive and refuses any label in `EMPTY_WORDS`. Keep both guards, and never click around it.
+- In the confirm dialog, accept only Google's accept code, a label learned from the user, or the exact label of the trash button. Never match the confirm button by trash words: "Empty trash" contains them.
+- Fail closed. When the count, the page or the account cannot be confirmed, stop without clicking.
 - Keep the version equal in `extension/remover.js`, `extension/manifest.json` and `package.json`. A test checks it.
 - Record every change users can notice in `CHANGELOG.md`.
 - Write docs in short, plain sentences. No em dashes or en dashes.
