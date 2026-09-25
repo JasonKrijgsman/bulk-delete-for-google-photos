@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Free Photos Remover for Google Photos",
-  "short_name": "Photos Remover",
+  "name": "Bulk Delete for Google Photos",
+  "short_name": "Bulk Delete",
   "version": "1.0.0",
   "description": "Moves the photos in your Google Photos library to the trash in bulk. Free, no daily limit, nothing leaves your browser.",
-  "homepage_url": "https://github.com/JasonKrijgsman/free-photos-remover",
+  "homepage_url": "https://github.com/JasonKrijgsman/bulk-delete-for-google-photos",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",

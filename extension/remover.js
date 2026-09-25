@@ -1,5 +1,5 @@
 /*
- * Free Photos Remover for Google Photos
+ * Bulk Delete for Google Photos
  *
  * Moves photos from your Google Photos Library or Archive to the trash in
  * bulk, free and without a daily limit. It clicks the same checkboxes and
@@ -9,24 +9,26 @@
  * Use it as a browser extension (see README.md), or paste this whole file into
  * the browser console on photos.google.com.
  *
- * MIT licence. https://github.com/JasonKrijgsman/free-photos-remover
+ * MIT licence. https://github.com/JasonKrijgsman/bulk-delete-for-google-photos
  * Not affiliated with or endorsed by Google.
  */
 (function (root) {
   'use strict';
 
   const VERSION = '1.0.0';
-  const PANEL_ID = 'free-photos-remover';
-  const STORE_PREFIX = 'freePhotosRemover.';
-  const REPO_URL = 'https://github.com/JasonKrijgsman/free-photos-remover';
+  const NAME = 'Bulk Delete for Google Photos';
+  const PANEL_ID = 'bulk-delete-for-google-photos';
+  const STORE_PREFIX = 'bulkDeleteForGooglePhotos.';
+  const REPO_URL = 'https://github.com/JasonKrijgsman/bulk-delete-for-google-photos';
 
   // Google Photos keeps its top bar, and the selection bar that replaces it,
   // in the top 64 CSS pixels. Buttons lower on the page are never clicked.
   const TOP_BAR_HEIGHT = 72;
 
-  // Google marks the buttons of its dialogs with action codes that do not
-  // change with the language. In the trash dialog, seen on 25 Sep 2026,
-  // "Weggooien" (confirm) carries EBS5u and "Annuleren" (cancel) IbE0S.
+  // Google marks the buttons of its dialogs with action codes. In the trash
+  // dialog, seen on the Dutch interface on 25 Sep 2026, "Weggooien" (confirm)
+  // carries EBS5u and "Annuleren" (cancel) IbE0S. They look like code, not
+  // translated text, but only the Dutch interface was seen.
   const ACCEPT_ACTION = 'EBS5u';
   const CANCEL_ACTION = 'IbE0S';
 
@@ -42,18 +44,29 @@
     'المهملات', 'ट्रैश', 'ถังขยะ', 'ゴミ箱', '휴지통', '回收站', '垃圾桶'
   ].join('|'), 'iu');
 
-  // Words for emptying the trash or deleting for good. A button whose label
-  // holds one of these is never clicked and never learned, whatever else
-  // matches. This is a second line: the tool only clicks at all while the
-  // page is the Library or the Archive, where these buttons do not exist.
+  // Verbs for emptying something. Alone they are harmless: "Clear selection"
+  // reads "Tyhjennä valinta" in Finnish. Next to a trash word they empty it.
   const EMPTY_WORDS = new RegExp([
-    '\\bempty\\b', 'permanent', 'forever', 'leegmaken', 'definitief', 'leeren', 'endgültig',
-    'vider', 'définitiv', 'vaciar', 'buidar', 'definitiv', 'svuota', 'esvaziar', 'opróżnij',
-    'trwale', 'töm', 'tøm', 'tyhjennä', 'pysyvästi', 'vyprázdn', 'trvale', 'ürít', 'véglegesen',
-    'golește', 'isprazni', 'izprazni', 'trajno', 'boşalt', 'kalıcı', 'kosongkan', 'очист',
-    'навсегда', 'спорожн', 'назавжди', 'изпразн', 'άδειασ', 'οριστικ', 'רוקן', 'לצמיתות',
-    'إفراغ', 'نهائي', 'खाली', 'ล้าง', 'を空', '完全に削除', '비우기', '영구', '清空', '永久'
+    '\\bempty\\b', 'leegmaken', 'leeren', 'vider', 'vaciar', 'buid', 'svuota', 'esvaziar',
+    'opróżnij', 'töm', 'tøm', 'tyhjennä', 'tühjenda', 'iztukš', 'ištušt', 'vyprázdn', 'ürít',
+    'golește', 'isprazni', 'izprazni', 'испразн', 'изпразн', 'boşalt', 'kosongkan', 'dọn sạch',
+    'очист', 'спорожн', 'άδειασ', 'רוקן', 'إفراغ', 'खाली', 'ล้าง', 'を空', '비우기', '清空'
   ].join('|'), 'iu');
+
+  // Words for deleting for good.
+  const PERMANENT_WORDS = new RegExp([
+    'permanen', 'forever', 'definitief', 'endgültig', 'définitiv', 'definitiv', 'trwale', 'trvale',
+    'véglegesen', 'trajno', 'kalıcı', 'pysyvästi', 'lõplikult', 'neatgriezenisk', 'visam laikui',
+    'vĩnh viễn', 'навсегда', 'назавжди', 'οριστικ', 'לצמיתות', 'نهائي', '完全に削除', '영구', '永久'
+  ].join('|'), 'iu');
+
+  // A button or a dialog that empties the trash or deletes for good. The tool
+  // never clicks one, never confirms one and never learns one. This is a
+  // second line: it only clicks at all on the Library and the Archive.
+  function forbidden(text) {
+    const t = String(text || '');
+    return PERMANENT_WORDS.test(t) || (EMPTY_WORDS.test(t) && TRASH_WORDS.test(t));
+  }
 
   const MESSAGES = {
     'unsupported-page': 'Open your Photos library or your Archive first.',
@@ -62,12 +75,14 @@
     'page-changed': 'The page or the account changed, so it stopped.',
     'bad-limit': 'Enter a whole number, or leave the box empty for all.',
     'clear-failed': 'Could not clear the current selection. Clear it yourself, then start again.',
-    'no-count': 'Could not read how many photos Google selected, so nothing from that batch was moved. Stopped to be safe.',
+    'no-count': 'Could not read how many photos Google selected, so nothing from that batch was moved. Stopped to be safe. Check that no photos are still selected.',
     'too-many': 'Google selected more photos than planned, so nothing from that batch was moved. Stopped to be safe.',
-    'no-trash-button': 'Could not find the trash button.',
+    'no-trash-button': 'Could not find the trash button. Check that no photos are still selected.',
     'no-dialog': 'Google did not react to the trash button.',
     'unexpected-dialog': 'More than one Google dialog opened, so nothing was confirmed. Check the page.',
+    'unsafe-dialog': 'The Google dialog speaks of emptying the trash or deleting for good, so nothing was confirmed.',
     'no-confirm-button': 'Could not find the confirm button in the Google dialog. Nothing from that batch was moved.',
+    'no-effect': 'The Google dialog closed, but the photos stayed selected. Nothing from that batch was moved.',
     'trash-timeout': 'Google took too long to move the photos. Check the page, then start again.',
     'not-removed': 'Google did not remove all photos from the last batch. Try again later.',
     'busy': 'It is already running.',
@@ -144,7 +159,9 @@
       poll: 100,
       stepTimeout: 15000,
       barTimeout: 8000,
+      dialogSettle: 500,
       trashTimeout: 120000,
+      effectTimeout: 15000,
       emptyQuiet: 5000,
       pauseBetweenBatches: 1000,
       maxIdleScrolls: 3,
@@ -164,15 +181,35 @@
       o.onProgress(Object.assign({}, state));
     }
 
+    // Chrome barely draws a hidden tab, so the page stops changing. Wait for
+    // it to come back instead of timing out.
+    async function pauseWhileHidden(ignoreStop) {
+      const phase = state.phase;
+      o.log('Paused: this tab is hidden. Keep it in front to continue.');
+      progress('paused');
+      while (adapter.isHidden()) {
+        if (stopRequested && !ignoreStop) throw new RunError('stopped');
+        await o.sleep(o.poll * 5);
+      }
+      o.log('Continuing.');
+      progress(phase);
+    }
+
     // Polls check() until it returns something truthy, for at most timeout
-    // ms. With stableFor, the value must hold that long without a break.
-    // Stop interrupts the wait unless ignoreStop is set.
+    // ms of visible time. With stableFor, the value must hold that long
+    // without a break. Stop interrupts the wait unless ignoreStop is set.
     async function waitFor(check, timeout, stableFor, ignoreStop) {
       const tries = Math.max(1, Math.ceil(timeout / o.poll));
       const needed = Math.max(1, Math.ceil((stableFor || 0) / o.poll));
       let streak = 0;
-      for (let i = 0; i < tries; i++) {
+      let i = 0;
+      while (i < tries) {
         if (stopRequested && !ignoreStop) throw new RunError('stopped');
+        if (adapter.isHidden()) {
+          await pauseWhileHidden(ignoreStop);
+          streak = 0;
+          continue;
+        }
         const value = check();
         if (value) {
           streak++;
@@ -180,6 +217,7 @@
         } else {
           streak = 0;
         }
+        i++;
         await o.sleep(o.poll);
       }
       return null;
@@ -190,20 +228,13 @@
       if (!adapter.samePlace(pin)) throw new RunError('page-changed');
     }
 
-    // Chrome barely draws a hidden tab, so the page stops reacting. Wait.
-    async function waitWhileHidden() {
-      if (!adapter.isHidden()) return;
-      o.log('Paused: this tab is hidden. Keep it in front to continue.');
-      progress('paused');
-      while (adapter.isHidden()) {
-        if (stopRequested) throw new RunError('stopped');
-        await o.sleep(o.poll * 5);
+    // With force, it also presses Escape when no selection bar is drawn,
+    // because photos can be selected while the bar has not slid in yet.
+    async function clearSelection(force) {
+      if (!adapter.inSelectionMode()) {
+        if (force) adapter.pressEscape();
+        return;
       }
-      o.log('Continuing.');
-    }
-
-    async function clearSelection() {
-      if (!adapter.inSelectionMode()) return;
       adapter.clearSelection(false);
       if (await waitFor(function () { return !adapter.inSelectionMode(); }, 3000, 0, true)) return;
       adapter.clearSelection(true);
@@ -216,13 +247,14 @@
     // checkboxes that sit next to exactly one photo link.
     async function selectBatch(want) {
       progress('selecting');
-      await waitWhileHidden();
+      if (adapter.isHidden()) await pauseWhileHidden(false);
       adapter.scrollToTop();
       await o.sleep(o.settleDelay);
       const ids = [];
       const seen = new Set();
       let idle = 0;
       let staleRounds = 0;
+      let reachedEnd = false;
       while (ids.length < want && !stopRequested) {
         checkPlace();
         let added = 0;
@@ -249,26 +281,26 @@
         await o.sleep(o.settleDelay);
         if (added === 0 && !moved) {
           idle++;
-          if (idle >= o.maxIdleScrolls) break;
+          if (idle >= o.maxIdleScrolls) { reachedEnd = true; break; }
         } else {
           idle = 0;
         }
       }
-      return ids;
+      return { ids: ids, reachedEnd: reachedEnd };
     }
 
-    async function trashBatch(ids, want) {
+    async function trashBatch(batch, want) {
+      const ids = batch.ids;
       progress('checking');
       let counted = null;
       try {
         await o.sleep(o.settleDelay);
-        await waitWhileHidden();
         // The selection bar slides in. Give it a few seconds to arrive.
         await waitFor(function () { return adapter.findTrashButton(); }, o.barTimeout);
         counted = await waitFor(function () { return adapter.selectionCount(); }, o.barTimeout);
         checkPlace();
       } catch (err) {
-        if (err && err.code === 'stopped') await clearSelection();
+        if (err && err.code === 'stopped') await clearSelection(true);
         throw err;
       }
 
@@ -277,11 +309,11 @@
       o.log('Ticked ' + ids.length + ' photos. Google shows ' +
         (counted ? counted + ' selected' : 'no count') + '.');
       if (!counted) {
-        await clearSelection();
+        await clearSelection(true);
         throw new RunError('no-count');
       }
       if (counted > want || counted > ids.length) {
-        await clearSelection();
+        await clearSelection(true);
         throw new RunError('too-many', { counted: counted, want: want, ticked: ids.length });
       }
 
@@ -291,7 +323,7 @@
 
       progress('trashing');
       if (stopRequested) {
-        await clearSelection();
+        await clearSelection(true);
         throw new RunError('stopped');
       }
       const before = adapter.dialogs();
@@ -306,24 +338,38 @@
         try {
           trashLabel = await o.teach('trash', { place: pin });
         } catch (err) {
-          await clearSelection();
+          await clearSelection(true);
           throw err;
         }
         checkPlace();
         adapter.useLabel('trash', trashLabel);
         taughtTrash = true;
       } else {
-        await clearSelection();
+        await clearSelection(true);
         throw new RunError('no-trash-button');
       }
 
-      // From here on the batch is finished even when Stop is pressed, so
-      // the count stays true. Google either asks, or moves them straight away.
+      // From here on the batch is finished even when Stop is pressed, so the
+      // count stays true. Google either asks, or moves them straight away.
+      // A dialog only counts once it has been the only new one for a moment,
+      // so a pop-up that opens next to it is never mistaken for it.
+      let candidate = null;
+      let candidatePolls = 0;
       let clearedPolls = 0;
       const outcome = await waitFor(function () {
         const fresh = adapter.dialogs().filter(function (d) { return before.indexOf(d) === -1; });
         if (fresh.length > 1) return { many: true };
-        if (fresh.length === 1) return { dialog: fresh[0] };
+        if (fresh.length === 1) {
+          clearedPolls = 0;
+          if (fresh[0] !== candidate) {
+            candidate = fresh[0];
+            candidatePolls = 0;
+          }
+          candidatePolls++;
+          return candidatePolls * o.poll >= o.dialogSettle ? { dialog: candidate } : null;
+        }
+        candidate = null;
+        candidatePolls = 0;
         if (!adapter.inSelectionMode()) {
           clearedPolls++;
           if (clearedPolls * o.poll >= 1000) return { cleared: true };
@@ -333,7 +379,7 @@
         return null;
       }, o.stepTimeout, 0, true);
       if (!outcome) {
-        await clearSelection();
+        await clearSelection(true);
         throw new RunError('no-dialog');
       }
       if (outcome.many) throw new RunError('unexpected-dialog');
@@ -341,7 +387,15 @@
       let taughtConfirm = null;
       if (outcome.dialog) {
         const dialog = outcome.dialog;
-        const confirm = adapter.findConfirmButton(dialog, trashLabel);
+        if (adapter.dialogForbidden(dialog)) {
+          adapter.cancelDialog(dialog);
+          await o.sleep(o.settleDelay);
+          await clearSelection(true);
+          throw new RunError('unsafe-dialog');
+        }
+        // A trash button learned in this batch may have been the wrong one,
+        // so the user confirms its dialog too.
+        const confirm = taughtTrash ? null : adapter.findConfirmButton(dialog, trashLabel);
         if (confirm) {
           checkPlace();
           o.log('Confirming with "' + adapter.labelOf(confirm) + '".');
@@ -352,7 +406,7 @@
           } catch (err) {
             adapter.cancelDialog(dialog);
             await o.sleep(o.settleDelay);
-            await clearSelection();
+            await clearSelection(true);
             throw err;
           }
           checkPlace();
@@ -360,32 +414,39 @@
           o.log('Dialog buttons: ' + adapter.buttonLabels(dialog).join(' | '));
           adapter.cancelDialog(dialog);
           await o.sleep(o.settleDelay);
-          await clearSelection();
+          await clearSelection(true);
           throw new RunError('no-confirm-button');
         }
         progress('waiting');
-        const done = await waitFor(function () {
-          return !adapter.isOpen(dialog) && !adapter.inSelectionMode();
-        }, o.trashTimeout, 500, true);
-        if (!done) throw new RunError('trash-timeout');
+        const closed = await waitFor(function () { return !adapter.isOpen(dialog); }, o.trashTimeout, 300, true);
+        if (!closed) throw new RunError('trash-timeout');
+        // Google drops the selection as soon as the move starts. A selection
+        // that stays means the click moved nothing.
+        const dropped = await waitFor(function () { return !adapter.inSelectionMode(); }, o.effectTimeout, 500, true);
+        if (!dropped) {
+          await clearSelection(true);
+          throw new RunError('no-effect');
+        }
       }
 
       // Proof that they went: photos are shown again at the top, and none of
-      // them is from this batch. An empty grid counts only after a longer
-      // quiet spell, because a grid that is still loading is empty too.
+      // them is from this batch. An empty grid counts only after a quiet
+      // spell, and a longer one unless this batch reached the end of the
+      // grid, because a grid that is still loading is empty too.
       progress('verifying');
       adapter.scrollToTop();
       await o.sleep(o.settleDelay);
+      const quiet = batch.reachedEnd ? o.emptyQuiet : o.emptyQuiet * 3;
       let emptyPolls = 0;
       const gone = await waitFor(function () {
         const shown = adapter.tiles();
         if (!shown.length) {
           emptyPolls++;
-          return emptyPolls * o.poll >= o.emptyQuiet && !adapter.inSelectionMode();
+          return emptyPolls * o.poll >= quiet && !adapter.inSelectionMode();
         }
         emptyPolls = 0;
         return !shown.some(function (t) { return probe.has(t.id); });
-      }, o.stepTimeout + o.emptyQuiet, 1000, true);
+      }, o.stepTimeout + quiet, 1000, true);
       if (!gone) throw new RunError('not-removed');
       if (taughtTrash) adapter.remember('trash', trashLabel);
       if (taughtConfirm) adapter.remember('confirm', taughtConfirm);
@@ -409,15 +470,18 @@
         if (expected && !adapter.samePlace(expected)) throw new RunError('page-changed');
         if (expected) pin = expected;
         if (adapter.modalOpen()) throw new RunError('close-popup');
-        await clearSelection();
+        // Numbers already in the top bar, such as a badge, are not a count.
+        adapter.markBaseline();
+        await clearSelection(false);
+        adapter.markBaseline();
         let reason = 'limit';
         while (state.trashed < limit) {
           if (stopRequested) { reason = 'stopped'; break; }
           const want = Math.min(o.batchSize, limit - state.trashed);
-          const ids = await selectBatch(want);
-          if (stopRequested) { await clearSelection(); reason = 'stopped'; break; }
-          if (ids.length === 0) { reason = 'empty'; break; }
-          const moved = await trashBatch(ids, want);
+          const batch = await selectBatch(want);
+          if (stopRequested) { await clearSelection(true); reason = 'stopped'; break; }
+          if (batch.ids.length === 0) { reason = 'empty'; break; }
+          const moved = await trashBatch(batch, want);
           state.trashed += moved;
           state.batches++;
           progress('batch-done');
@@ -447,6 +511,7 @@
   function createDomAdapter(doc, win, store, options) {
     const opt = Object.assign({ path: null }, options || {});
     const session = { trash: null, confirm: null };
+    let baseline = [];
 
     function isPanel(el) {
       const panel = doc.getElementById(PANEL_ID);
@@ -479,8 +544,8 @@
       return raw.replace(/\s+/g, ' ').trim();
     }
 
-    function forbidden(label) {
-      return EMPTY_WORDS.test(label);
+    function actionOf(el) {
+      return el.getAttribute('data-mdc-dialog-action');
     }
 
     function buttonsIn(scope) {
@@ -630,25 +695,35 @@
       return bars;
     }
 
-    // The "N selected" text: a short text with a number in the top bar that
-    // is not part of a button. It works the same left to right and right to
-    // left, and it does not need the trash button.
-    function countElement() {
-      const bars = topBars();
-      for (let b = 0; b < bars.length; b++) {
-        const nodes = bars[b].querySelectorAll('span, div, h1, h2, h3, p');
+    // Short texts in the top bar with a number and a word, outside buttons:
+    // "5 geselecteerd", "5 selected". A bare badge like "3" never counts.
+    function countCandidates() {
+      const found = [];
+      topBars().forEach(function (bar) {
+        const nodes = bar.querySelectorAll('span, div, h1, h2, h3, p');
         for (let i = 0; i < nodes.length; i++) {
           const el = nodes[i];
           if (el.children.length || isPanel(el)) continue;
           if (el.closest('button, [role="button"], a, input')) continue;
           const text = (el.textContent || '').trim();
-          if (!text || text.length > 40 || !/\d/.test(text)) continue;
+          if (!text || text.length > 40 || !/\d/.test(text) || !/\p{L}/u.test(text)) continue;
           if (!visible(el) || !inTopBar(el)) continue;
           const n = parseCount(text);
-          if (n !== null) return { el: el, n: n };
+          if (n !== null && found.every(function (f) { return f.el !== el; })) found.push({ el: el, n: n });
         }
-      }
-      return null;
+      });
+      return found;
+    }
+
+    // The "N selected" text, skipping any number that was already in the
+    // top bar before the run ticked anything.
+    function countElement() {
+      const found = countCandidates().filter(function (c) { return baseline.indexOf(c.el) === -1; });
+      return found.length ? found[0] : null;
+    }
+
+    function markBaseline() {
+      baseline = findTrashButton() ? [] : countCandidates().map(function (c) { return c.el; });
     }
 
     function selectionCount() {
@@ -657,7 +732,9 @@
     }
 
     function inSelectionMode() {
-      return !!findTrashButton() || (selectionCount() || 0) > 0;
+      if (findTrashButton()) return true;
+      const found = countElement();
+      return !!found && found.n > 0;
     }
 
     // "Clear selection" is the top-bar button right next to the count, on
@@ -713,18 +790,30 @@
       return onScreen(dialog);
     }
 
-    // Google's accept code finds the confirm button in any language. A label
-    // learned from the user, or the same label as the trash button, is the
-    // fallback. Cancel and anything that empties the trash never qualify.
+    // A dialog whose own text speaks of emptying the trash or of deleting
+    // for good is never confirmed, whatever its buttons say. The text pieces
+    // are joined with spaces: the browser runs "Cancel" and "Empty trash"
+    // together into "CancelEmpty trash", which hides the word "empty".
+    function dialogForbidden(dialog) {
+      const parts = [];
+      const walker = doc.createTreeWalker(dialog, 4); // 4: text nodes only
+      while (walker.nextNode()) parts.push(walker.currentNode.data);
+      buttonsIn(dialog).forEach(function (b) { parts.push(labelOf(b)); });
+      return forbidden(parts.join(' '));
+    }
+
+    // Google's accept code finds the confirm button in any language, but only
+    // in a dialog that also has Google's cancel code, as the trash dialog has.
+    // A label learned from the user, or the same label as the trash button,
+    // is the fallback. Cancel and forbidden buttons never qualify.
     function findConfirmButton(dialog, trashLabel) {
-      const buttons = buttonsIn(dialog).filter(function (b) {
-        return visible(b) && !forbidden(labelOf(b)) &&
-          b.getAttribute('data-mdc-dialog-action') !== CANCEL_ACTION;
+      const all = buttonsIn(dialog).filter(visible);
+      const buttons = all.filter(function (b) {
+        return !forbidden(labelOf(b)) && actionOf(b) !== CANCEL_ACTION;
       });
-      const accept = buttons.filter(function (b) {
-        return b.getAttribute('data-mdc-dialog-action') === ACCEPT_ACTION;
-      });
-      if (accept.length === 1) return accept[0];
+      const accept = buttons.filter(function (b) { return actionOf(b) === ACCEPT_ACTION; });
+      const cancel = all.filter(function (b) { return actionOf(b) === CANCEL_ACTION; });
+      if (accept.length === 1 && cancel.length === 1) return accept[0];
       const known = learned('confirm');
       if (known) {
         const hit = buttons.filter(function (b) { return labelOf(b) === known; });
@@ -746,10 +835,10 @@
     // when it is there, otherwise the Escape key.
     function cancelDialog(dialog) {
       const cancel = buttonsIn(dialog).filter(visible).filter(function (b) {
-        return b.getAttribute('data-mdc-dialog-action') === CANCEL_ACTION;
+        return actionOf(b) === CANCEL_ACTION;
       });
-      if (cancel.length === 1) cancel[0].click();
-      else pressEscape();
+      if (cancel.length === 1 && click(cancel[0])) return;
+      pressEscape();
     }
 
     function useLabel(kind, label) {
@@ -785,10 +874,13 @@
       scrollToTop: scrollToTop,
       scrollDown: scrollDown,
       findTrashButton: findTrashButton,
+      markBaseline: markBaseline,
       inSelectionMode: inSelectionMode,
       selectionCount: selectionCount,
+      clearButton: clearButton,
       dialogs: dialogs,
       isOpen: isOpen,
+      dialogForbidden: dialogForbidden,
       findConfirmButton: findConfirmButton,
       buttonLabels: buttonLabels,
       cancelDialog: cancelDialog,
@@ -904,8 +996,8 @@
     let lastSignature = '';
 
     const panel = h(doc, 'div', { id: PANEL_ID, style: STYLE.panel });
-    const pill = h(doc, 'button', { type: 'button', style: STYLE.pill, text: 'Photos Remover' });
-    const card = h(doc, 'div', { style: STYLE.card, role: 'region', 'aria-label': 'Free Photos Remover' });
+    const pill = h(doc, 'button', { type: 'button', style: STYLE.pill, text: 'Bulk Delete' });
+    const card = h(doc, 'div', { style: STYLE.card, role: 'region', 'aria-label': NAME });
     pill.addEventListener('click', function () { setCollapsed(false); });
     panel.appendChild(pill);
     panel.appendChild(card);
@@ -918,7 +1010,7 @@
     function log(line) {
       logLines.push(line);
       if (logLines.length > 30) logLines.shift();
-      if (win.console && win.console.log) win.console.log('[Free Photos Remover] ' + line);
+      if (win.console && win.console.log) win.console.log('[' + NAME + '] ' + line);
       if (logEl) {
         logEl.textContent = logLines.join('\n');
         logEl.scrollTop = logEl.scrollHeight;
@@ -955,7 +1047,7 @@
       return new Promise(function (resolve, reject) {
         teachText = kind === 'trash'
           ? 'I cannot find the trash button in this language. Click the trash button in the top bar of Google Photos once. I will remember it.'
-          : 'I cannot find the confirm button. Click the button in the Google dialog that moves the photos to the trash. I will remember it.';
+          : 'Click the button in the Google dialog that moves the photos to the trash. I will remember it.';
         render();
         function finish() {
           doc.removeEventListener('click', onClick, true);
@@ -1169,7 +1261,7 @@
       card.style.display = collapsed ? 'none' : 'block';
       if (collapsed) return;
       const header = h(doc, 'div', { style: STYLE.header }, [
-        h(doc, 'span', { style: STYLE.title, text: 'Free Photos Remover' }),
+        h(doc, 'span', { style: STYLE.title, text: NAME }),
         view === 'running' || view === 'confirm'
           ? h(doc, 'span', { text: '' })
           : button('Hide', STYLE.link, function () { setCollapsed(true); })
@@ -1200,10 +1292,13 @@
 
   const api = {
     VERSION: VERSION,
+    NAME: NAME,
     TRASH_WORDS: TRASH_WORDS,
     EMPTY_WORDS: EMPTY_WORDS,
+    PERMANENT_WORDS: PERMANENT_WORDS,
     MESSAGES: MESSAGES,
     RunError: RunError,
+    forbidden: forbidden,
     parseCount: parseCount,
     parseLimit: parseLimit,
     createStore: createStore,
@@ -1216,8 +1311,8 @@
     module.exports = api;
     return;
   }
-  root.FreePhotosRemover = api;
-  if (root.document && !root.FPR_NO_AUTOMOUNT) {
+  root.BulkDeleteForGooglePhotos = api;
+  if (root.document && !root.BULK_DELETE_NO_AUTOMOUNT) {
     const mount = function () { mountPanel(root.document, root); };
     if (root.document.body) mount();
     else root.document.addEventListener('DOMContentLoaded', mount);

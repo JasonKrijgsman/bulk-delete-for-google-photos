@@ -43,7 +43,12 @@ function fakeLibrary(options) {
     account: 'someone@example.com',
     barLatePolls: 0,
     hiddenPolls: 0,
-    blankPollsAfterTrash: 0
+    hideAfterClicks: 0,
+    hideFor: 0,
+    blankPollsAfterTrash: 0,
+    unsafeDialog: false,
+    confirmNoEffect: false,
+    barNeverDrawn: false
   }, options);
   const photos = Array.from({ length: o.total }, (_, i) => 'p' + i);
   const selected = new Set();
@@ -53,6 +58,7 @@ function fakeLibrary(options) {
   let dialogOpen = false;
   let barPollsLeft = o.barLatePolls;
   let hiddenLeft = o.hiddenPolls;
+  let tileClicks = 0;
   let blankLeft = 0;
   let where = '/';
   let account = o.account;
@@ -92,13 +98,18 @@ function fakeLibrary(options) {
           photos.slice(-o.extraSelected).forEach((id) => selected.add(id));
         }
         stats.maxSelected = Math.max(stats.maxSelected, selected.size);
+        tileClicks++;
+        // hideAfterClicks: the tab goes to the background right after ticking.
+        if (o.hideAfterClicks && tileClicks === o.hideAfterClicks) hiddenLeft = o.hideFor;
       } else if (el === TRASH) {
         stats.trashClicks++;
         if (o.askFirst) dialogOpen = true;
         else moveSelectedToTrash();
       } else if (el === CONFIRM) {
         stats.confirmClicks++;
-        moveSelectedToTrash();
+        // confirmNoEffect: the dialog closes, but nothing moves.
+        if (o.confirmNoEffect) dialogOpen = false;
+        else moveSelectedToTrash();
       }
       return true;
     },
@@ -110,15 +121,20 @@ function fakeLibrary(options) {
       pos = next;
       return moved;
     },
+    // While the tab is hidden, or when the bar is never drawn, there is no
+    // selection bar to find.
     findTrashButton: () => {
-      if (!selected.size) return null;
+      if (!selected.size || hiddenLeft > 0 || o.barNeverDrawn) return null;
       if (barPollsLeft > 0) { barPollsLeft--; return null; } // the bar is still sliding in
       return o.trashFound || learned.trash ? TRASH : null;
     },
-    inSelectionMode: () => selected.size > 0,
-    selectionCount: () => (o.countReadable && selected.size ? selected.size + o.ghostSelected : null),
+    markBaseline: () => {},
+    inSelectionMode: () => selected.size > 0 && !o.barNeverDrawn,
+    selectionCount: () => (o.countReadable && selected.size && hiddenLeft === 0 && !o.barNeverDrawn
+      ? selected.size + o.ghostSelected : null),
     dialogs: () => (dialogOpen ? [DIALOG] : []),
     isOpen: (d) => d === DIALOG && dialogOpen,
+    dialogForbidden: () => o.unsafeDialog,
     findConfirmButton: () => (o.confirmFound || learned.confirm ? CONFIRM : null),
     buttonLabels: () => ['Cancel', 'Move to trash'],
     labelOf: (el) => (el === TRASH || el === CONFIRM ? 'Move to trash' : ''),
@@ -131,7 +147,7 @@ function fakeLibrary(options) {
       stats.cancels++;
       dialogOpen = false;
     },
-    clearSelection: () => { selected.clear(); },
+    clearSelection: () => { if (!o.barNeverDrawn) selected.clear(); },
     anyPresent: (ids) => ids.some((id) => photos.slice(pos, pos + o.viewport).includes(id)),
     useLabel: (kind, label) => { learned[kind] = label; },
     remember: (kind, label) => { learned[kind] = label; learned['saved_' + kind] = label; },
@@ -181,11 +197,16 @@ test('buttons that empty the trash or delete for good are recognised, the normal
   const forbidden = ['Empty trash', 'Prullenbak leegmaken', 'Definitief verwijderen', 'Papierkorb leeren',
     'Endgültig löschen', 'Vider la corbeille', 'Supprimer définitivement', 'Vaciar papelera',
     'Eliminar definitivamente', 'Svuota cestino', 'Esvaziar lixeira', 'Opróżnij kosz', 'Delete permanently',
-    'Очистить корзину', 'ゴミ箱を空にする', '휴지통 비우기', '清空回收站'];
+    'Очистить корзину', 'ゴミ箱を空にする', '휴지통 비우기', '清空回收站', 'Tyhjennä roskakori',
+    'Dọn sạch thùng rác', 'Delete forever?'];
+  // Emptying words alone are fine: in some languages "Clear selection" uses one.
   const allowed = ['Naar prullenbak', 'Weggooien', 'Move to trash', 'Annuleren', 'Selectie wissen',
-    'Clear selection', 'Delen', 'Meer opties', 'In den Papierkorb verschieben', 'Placer dans la corbeille'];
-  forbidden.forEach((label) => assert.ok(FPR.EMPTY_WORDS.test(label), label));
-  allowed.forEach((label) => assert.ok(!FPR.EMPTY_WORDS.test(label), label));
+    'Clear selection', 'Delen', 'Meer opties', 'In den Papierkorb verschieben', 'Placer dans la corbeille',
+    'Tyhjennä valinta', 'Очистить выбор', 'ล้างการเลือก'];
+  forbidden.forEach((label) => assert.ok(FPR.forbidden(label), label));
+  allowed.forEach((label) => assert.ok(!FPR.forbidden(label), label));
+  const realDutchDialog = "Verwijderen uit je Google-account, apparaten waarop back-up aanstaat en plekken waar je ze hebt gedeeld binnen Google Foto's? Er komt dan 72,4 MB vrij in de opslag in je Google-account. Annuleren Weggooien";
+  assert.ok(!FPR.forbidden(realDutchDialog), 'the real Dutch trash dialog is allowed');
 });
 
 test('moves exactly the requested number, in batches no larger than asked', async () => {
@@ -407,6 +428,52 @@ test('stop during a teaching step cancels the dialog and clears the selection', 
   assert.equal(lib.isDialogOpen(), false);
   assert.equal(lib.selected.size, 0);
   assert.equal(lib.photos.length, 12);
+});
+
+test('a dialog about emptying the trash or deleting for good is cancelled, never confirmed', async () => {
+  const lib = fakeLibrary({ total: 20, unsafeDialog: true });
+  await assert.rejects(runnerFor(lib).run(5), { code: 'unsafe-dialog' });
+  assert.equal(lib.stats.confirmClicks, 0);
+  assert.equal(lib.stats.cancels, 1);
+  assert.equal(lib.isDialogOpen(), false);
+  assert.equal(lib.selected.size, 0);
+  assert.equal(lib.photos.length, 20);
+});
+
+test('after a trash button learned from a click, the user confirms that batch too', async () => {
+  const lib = fakeLibrary({ total: 12, trashFound: false, confirmFound: true });
+  const asked = [];
+  const teach = async (kind) => {
+    asked.push(kind);
+    lib.adapter.click(kind === 'trash' ? TRASH : CONFIRM);
+    return 'Move to trash';
+  };
+  const res = await runnerFor(lib, { batchSize: 5, teach }).run(Infinity);
+  assert.equal(res.trashed, 12);
+  assert.deepEqual(asked, ['trash', 'confirm'], 'the first batch asks for both, the rest asks for nothing');
+});
+
+test('a dialog that closes while the photos stay selected stops the run', async () => {
+  const lib = fakeLibrary({ total: 20, confirmNoEffect: true });
+  await assert.rejects(runnerFor(lib).run(5), { code: 'no-effect' });
+  assert.equal(lib.photos.length, 20);
+  assert.equal(lib.selected.size, 0, 'the selection is cleared');
+});
+
+test('a tab hidden while it waits for the selection bar pauses instead of giving up', async () => {
+  const lib = fakeLibrary({ total: 20, hideAfterClicks: 10, hideFor: 2000 });
+  const phases = [];
+  const res = await runnerFor(lib, { batchSize: 10, onProgress: (s) => phases.push(s.phase) }).run(10);
+  assert.equal(res.trashed, 10);
+  assert.ok(phases.includes('paused'));
+});
+
+test('when the selection bar never shows, it presses Escape to drop the selection', async () => {
+  const lib = fakeLibrary({ total: 20, barNeverDrawn: true });
+  await assert.rejects(runnerFor(lib, { batchSize: 10 }).run(10), { code: 'no-count' });
+  assert.ok(lib.stats.escapes >= 1);
+  assert.equal(lib.selected.size, 0);
+  assert.equal(lib.stats.trashClicks, 0);
 });
 
 test('a second run while one is busy is refused', async () => {

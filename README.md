@@ -1,4 +1,4 @@
-# Free Photos Remover for Google Photos
+# Bulk Delete for Google Photos
 
 Moves the photos in your Google Photos library to the trash in bulk. Free, with no daily limit.
 
@@ -13,15 +13,15 @@ Google Photos has no "delete all" button. Paid extensions sell one, and their fr
 ## What it never does
 
 - It never empties the trash. Your photos stay in the trash for 60 days, and you can restore them from there.
-- It never clicks a button that empties the trash or deletes photos for good.
-- It clicks nothing unless the page is your Library or your Archive, in the account you confirmed.
+- It clicks nothing unless the page is your Library or your Archive. It stops when the page or the signed-in account changes.
+- It never clicks a button, and never confirms a dialog, that speaks of emptying the trash or deleting for good. It recognises those words in about 30 languages.
 - It sends nothing anywhere and makes no network requests. It only runs on photos.google.com; Chrome lists that site as the one it can read and change.
 
 ## Install
 
-It works in Chrome, Edge, Brave and other Chromium browsers.
+It works in Chrome, Edge, Brave and other Chromium browsers. It is not in the Chrome Web Store, so you load it yourself:
 
-1. Download the ZIP from the [latest release](https://github.com/JasonKrijgsman/free-photos-remover/releases/latest) and unzip it. Or clone this repository.
+1. Download the ZIP from the [latest release](https://github.com/JasonKrijgsman/bulk-delete-for-google-photos/releases/latest) and unzip it. Or clone this repository.
 2. Open `chrome://extensions` (`edge://extensions` in Edge).
 3. Turn on **Developer mode**.
 4. Click **Load unpacked** and pick the unzipped folder. In a clone, pick the `extension` folder.
@@ -30,7 +30,7 @@ It works in Chrome, Edge, Brave and other Chromium browsers.
 
 1. Open [photos.google.com](https://photos.google.com) and sign in to the account you want to clean up.
 2. Close any Google pop-up, such as a storage warning.
-3. Click **Photos Remover** at the bottom right.
+3. Click **Bulk Delete** at the bottom right.
 4. Check the account in the panel. The photos come from that account.
 5. Enter how many photos to move, or leave the box empty to move all of them.
 6. Click **Move to trash**, then **Yes, move them**.
@@ -49,33 +49,40 @@ You can also paste `extension/remover.js` into the browser console on photos.goo
 
 ## Languages
 
-It finds Google's confirm button by a code Google puts on it, which is the same in every language. It finds the trash button by its label, and it knows the word for "trash" in more than 30 languages. It was tested on the Dutch interface of Google Photos. If it cannot find a button in your language, it asks you to click that button once. It remembers your click after the first batch works. **Forget learned buttons** in the panel clears what it learned.
+It was tested on the Dutch interface of Google Photos.
+
+- It finds the trash button by its label. It knows the word for "trash" in more than 30 languages.
+- It finds the confirm button by a code Google puts on the buttons of its dialogs. On the Dutch interface that code is not text, so it is likely the same in other languages; that has not been checked.
+- If it cannot find a button in your language, it asks you to click that button once. It remembers your click after the first batch works. **Forget learned buttons** in the panel clears what it learned.
 
 ## If it stops
 
 | Message | What to do |
 |---|---|
 | Close the Google Photos pop-up first | Close the pop-up, then start again. |
-| Could not read how many photos Google selected | Nothing from that batch was moved. Open an issue and name your interface language. |
+| Could not read how many photos Google selected | Nothing from that batch was moved. Check that no photos are still selected. Open an issue and name your interface language. |
 | Google selected more photos than planned | Nothing from that batch was moved. Start again. |
 | The page or the account changed | It stopped on purpose. Go back to the Library or Archive and start again. |
+| More than one Google dialog opened | Nothing was confirmed. Close the dialogs, then start again. |
+| The Google dialog speaks of emptying the trash or deleting for good | Nothing was confirmed. Open an issue and name your interface language. |
 | Google did not remove all photos from the last batch | Google may be slowing you down. Wait a while, then start again. |
 
-Google changes its pages from time to time. If the remover stops working, [open an issue](https://github.com/JasonKrijgsman/free-photos-remover/issues).
+Google changes its pages from time to time. If it stops working, [open an issue](https://github.com/JasonKrijgsman/bulk-delete-for-google-photos/issues).
 
 ## How it works
 
 `extension/remover.js` is the whole tool. It has three parts:
 
 - **The runner** holds the procedure: select a batch, check the count Google shows, click the trash button, confirm, then check that the photos are gone.
-- **The page adapter** finds things by the structure of the page, not by the class names Google generates. A photo checkbox is a checkbox that sits next to exactly one link to a photo. Every click goes through one function, which refuses off the Library and the Archive.
+- **The page adapter** finds things by the structure of the page, not by the class names Google generates. A photo checkbox is a checkbox that sits next to exactly one link to a photo. Every click on a Google Photos element goes through one function, which refuses off the Library and the Archive.
 - **The panel** is the small window at the bottom right.
 
 It checks its own work:
 
 - It only clicks on the page and in the account you confirmed. If either changes, it stops.
 - Before each batch it reads the count Google shows. If it cannot read the count, or the count is higher than planned, it clears the selection and stops.
-- After each batch it checks that photos show at the top of the grid again and that none of them is from that batch.
+- It only confirms a dialog that stays the only new one for half a second, and that has both Google's confirm and cancel codes.
+- After confirming, the selection must disappear. Then photos must show at the top of the grid again, and none of them may be from that batch.
 - It never clicks the select-all box of a day, because one click there can select hundreds of photos.
 
 ## Development
@@ -86,7 +93,7 @@ There is no build step. The `extension` folder is the product.
 npm test
 ```
 
-This runs the unit tests and, when Chrome is installed, a headless run against `test/fixture/photos.html`. That page copies the structure of the Google Photos library page. Its scenarios include a decoy trash button outside the top bar, a right-to-left layout, an "Empty trash" button and a dialog that would empty the trash; none of them may ever be clicked. Set `CHROME_PATH` when Chrome is not found.
+This runs the unit tests and, when Chrome is installed, a headless run against `test/fixture/photos.html`. That page copies the structure of the Google Photos library page. Its scenarios include a decoy trash button outside the top bar, a right-to-left layout, an "Empty trash" button, dialogs that would empty the trash or delete for good, a pop-up next to the confirm dialog and a number badge in the top bar. Set `CHROME_PATH` when Chrome is not found.
 
 To draw the icons again: `python scripts/make-icons.py`.
 
