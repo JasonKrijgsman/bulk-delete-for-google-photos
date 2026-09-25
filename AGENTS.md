@@ -35,6 +35,8 @@ A browser extension, also usable as a userscript or a console script, that moves
 - `test/userscript.test.js`: fails when the committed userscript differs from what the build script writes, or when its header is wrong.
 - `test/e2e.test.js` and `test/fixture/`: a headless Chrome run against a page that copies the structure of the real library page.
 - `docs/`: the website, served by GitHub Pages at https://jasonkrijgsman.github.io/bulk-delete-for-google-photos/. The README uses its screenshots in `docs/images/`.
+- `docs/13eeca9cd22f8caf762839933739d561.txt`: the IndexNow key. It proves to Bing and other IndexNow engines that we own the site. It is public on purpose. Keep it. After a change to the website, submit the changed URLs to `https://api.indexnow.org/indexnow` with this key and this file as the `keyLocation`.
+- Crawlers read `robots.txt` only at the root of a host, so they never see `docs/robots.txt`. Submit the sitemap by hand in Google Search Console and Bing Webmaster Tools.
 - `.github/workflows/ci.yml`: tests on every push and pull request, and the release on a tag.
 - `.github/ISSUE_TEMPLATE/`: the bug report and feature request forms, and a link to the website.
 
