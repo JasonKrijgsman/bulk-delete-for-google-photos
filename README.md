@@ -37,6 +37,8 @@ It works in Chrome, Edge, Brave and other Chromium browsers. It is not in the Ch
 7. Keep the tab open and in front until the panel says it is done. It pauses while the tab is hidden, because Chrome hardly draws a hidden tab.
 8. To delete the photos for good, open the trash in Google Photos and empty it yourself.
 
+It moves about 750 photos a minute. Its first real run emptied a Library of 2,903 photos in four minutes, then an Archive of 86.
+
 **Stop** ends the run safely. Before a batch reaches the trash button, it clears the selection. Once Google is moving a batch, it lets that batch finish and counts it.
 
 Google's confirm dialog says the photos will be removed from your Google account, your backed-up devices and the places you shared them. That is how Google words a move to the trash. The photos go to the trash, and Google says so at the bottom of the page.
