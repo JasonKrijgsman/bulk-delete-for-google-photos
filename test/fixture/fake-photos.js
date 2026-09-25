@@ -256,7 +256,7 @@
     });
     d.append(el('h2', {}, title));
     // retentionNote: a body line about how long the trash keeps photos.
-    if (fx.retentionNote) d.append(el('p', {}, 'Items in the trash are permanently deleted after 60 days.'));
+    if (fx.retentionNote) d.append(el('p', {}, 'Items in the trash are permanently deleted after 30 days.'));
     d.append(cancel, ok);
     document.body.appendChild(d);
     fx.dialog = d;
@@ -408,7 +408,83 @@
       { error: 'close-popup', trashClicks: 0, removed: 0 });
     await add('Google moves photos without asking', { total: 15, askFirst: false }, { batchSize: 50 },
       { trashed: 15, removed: 15, reason: 'empty', confirmClicks: 0, error: null });
+    results.push(await panelScenario());
     return results;
+  }
+
+  // The panel itself, driven through its own buttons with its real default
+  // timings: a typo, a page change during the confirm step, a full run and
+  // the progress in the tab title.
+  async function panelScenario() {
+    const problems = [];
+    const name = 'The panel: typo, page change while confirming, full run, tab title';
+    try {
+      await panelSteps(problems);
+    } catch (e) {
+      problems.push(String(e && e.message ? e.message : e));
+    }
+    const panel = document.getElementById('bulk-delete-for-google-photos');
+    if (panel) panel.remove();
+    return { name, problems, ok: problems.length === 0 };
+  }
+
+  async function panelSteps(problems) {
+    reset({ total: 30 });
+    await wait(100);
+    FPR.mountPanel(document, window, { path: () => fx.path });
+    const panel = document.getElementById('bulk-delete-for-google-photos');
+    const buttonNamed = (text) => Array.from(panel.querySelectorAll('button')).find((b) => b.textContent === text);
+    const press = (text) => {
+      const b = buttonNamed(text);
+      if (!b) throw new Error('no "' + text + '" button in the panel; it shows: ' + panel.textContent.slice(0, 160));
+      b.click();
+    };
+    const typeLimit = (text) => {
+      const input = panel.querySelector('input');
+      input.value = text;
+      input.dispatchEvent(new Event('input'));
+    };
+    const baseTitle = document.title;
+
+    typeLimit('5-');
+    press('Move to trash');
+    await wait(50);
+    if (!/whole number/.test(panel.textContent)) problems.push('a typo showed no error');
+    if (buttonNamed('Yes, move them')) problems.push('a typo reached the confirm step');
+
+    typeLimit('');
+    press('Move to trash');
+    await wait(50);
+    if (!/Move ALL photos from the Library of someone@example.com/.test(panel.textContent)) {
+      problems.push('confirm text: ' + panel.textContent.slice(0, 160));
+    }
+    fx.path = '/archive';
+    await wait(1500);
+    if (buttonNamed('Yes, move them')) {
+      problems.push('the confirm step survived a page change');
+      return;
+    }
+    fx.path = '/';
+    await wait(1500);
+
+    press('Move to trash');
+    await wait(50);
+    press('Yes, move them');
+    let sawProgressTitle = false;
+    for (let i = 0; i < 600 && !/Nothing is left/.test(panel.textContent); i++) {
+      if (/^\[Bulk Delete: \d+ moved\] /.test(document.title)) sawProgressTitle = true;
+      await wait(250);
+    }
+    if (!/Moved 30 photos to the trash in \d+ s\. Nothing is left in your Library\./.test(panel.textContent)) {
+      problems.push('done text: ' + panel.textContent.slice(0, 200));
+    }
+    if (fx.photos.length !== 0) problems.push(fx.photos.length + ' photos left');
+    if (document.title !== '[Bulk Delete: done, 30 moved] ' + baseTitle) problems.push('title when done: ' + document.title);
+    if (!sawProgressTitle && fx.trashClicks > 1) problems.push('no progress in the title');
+    press('Back');
+    await wait(50);
+    if (document.title !== baseTitle) problems.push('title not restored: ' + document.title);
+    if (fx.groupClicks || fx.decoyClicks || fx.emptyClicks) problems.push('clicked something it must not');
   }
 
   runAll().then((results) => {

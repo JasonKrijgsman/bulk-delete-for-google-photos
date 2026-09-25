@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photos</title>
+<!--
+  A made-up photo library, used only to render pictures of the panel.
+  scripts/render-images.mjs opens it in headless Chrome. It copies the page
+  structure the panel relies on (see test/fixture/fake-photos.js), not Google's
+  look: there is no Google logo or artwork, and the "photos" are CSS gradients.
+  It mounts the real panel from extension/remover.js and drives it with clicks
+  on the panel's own buttons. Parameters are described at the top of demo.js.
+-->
+<style>
+  :root {
+    color-scheme: light;
+    --text: #1f1f1f;
+    --muted: #5f6368;
+    --icon: #444746;
+    --accent: #2563eb;
+    --accent-soft: #e6eefc;
+    --tile-bg: #dfe8fb;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #fff; color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  svg { display: block; }
+
+  /* Top bar: stays within the top 64 px, like the real one. */
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; height: 64px; z-index: 3;
+    display: flex; align-items: center; gap: 6px; padding: 0 16px 0 8px; background: #fff;
+  }
+  #topbar.selecting { box-shadow: 0 1px 4px rgba(32, 33, 36, 0.18); }
+  .icon-btn {
+    width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; flex: none;
+    display: inline-grid; place-items: center; background: transparent; color: var(--icon); cursor: pointer;
+  }
+  .icon-btn svg { width: 22px; height: 22px; }
+  .brand { display: flex; align-items: center; gap: 10px; width: 206px; flex: none; padding-left: 6px; font-size: 21px; color: var(--icon); }
+  .brand svg { width: 30px; height: 30px; }
+  .search {
+    flex: 1 1 auto; max-width: 640px; height: 46px; display: flex; align-items: center; gap: 12px;
+    padding: 0 18px; border-radius: 23px; background: #f1f3f6; color: var(--muted);
+  }
+  .search svg { width: 20px; height: 20px; flex: none; }
+  .search input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 16px; color: var(--text); outline: none; }
+  .search input::placeholder { color: var(--muted); }
+  .grow { flex: 1 1 auto; }
+  .text-btn {
+    height: 36px; display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; flex: none;
+    border: 0; border-radius: 18px; background: transparent; color: var(--icon); font: inherit; font-weight: 600; cursor: pointer;
+  }
+  .text-btn svg { width: 20px; height: 20px; }
+  .avatar {
+    width: 34px; height: 34px; margin-left: 8px; padding: 0; border: 0; border-radius: 50%; flex: none;
+    background: #7c5cc4; color: #fff; font: 600 15px/34px system-ui, sans-serif; cursor: pointer;
+  }
+  .count { font-size: 20px; padding-left: 6px; }
+
+  /* Navigation on the left. Links only; the panel never looks here. */
+  #nav { position: fixed; top: 64px; left: 0; bottom: 0; width: 248px; padding: 6px 12px 18px 0; display: flex; flex-direction: column; gap: 2px; }
+  #nav a {
+    display: flex; align-items: center; gap: 18px; height: 42px; padding: 0 16px 0 24px;
+    border-radius: 0 21px 21px 0; color: var(--icon); text-decoration: none; font-weight: 600;
+  }
+  #nav a.active { background: var(--accent-soft); color: #1d4ed8; }
+  #nav svg { width: 21px; height: 21px; flex: none; }
+  .storage { margin-top: auto; padding: 0 12px 0 24px; color: var(--muted); font-size: 13px; }
+  .storage b { display: block; color: var(--text); font-weight: 600; margin-bottom: 8px; }
+  .meter { height: 4px; border-radius: 2px; background: #e4e7ec; margin-bottom: 7px; overflow: hidden; }
+  .meter span { display: block; width: 94%; height: 100%; background: #d93025; }
+
+  /* The photo grid. Only rows near the visible part are in the DOM. */
+  #main { position: fixed; top: 64px; left: 248px; right: 0; bottom: 0; overflow-y: auto; scrollbar-width: none; padding: 0 16px 0 4px; }
+  #main::-webkit-scrollbar { display: none; }
+  #grid { position: relative; }
+  .day { position: absolute; left: 0; right: 0; height: 50px; display: flex; align-items: center; gap: 10px; padding-top: 8px; font-size: 14px; font-weight: 600; }
+  .day [role="checkbox"] { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #80868b; display: none; }
+  body.selecting .day [role="checkbox"] { display: block; }
+  .tile { position: absolute; overflow: hidden; background: var(--tile-bg); }
+  .tile .img { position: absolute; inset: 0; }
+  .tile.sel .img { inset: 13px; border-radius: 6px; }
+  .tile a { position: absolute; inset: 0; }
+  .tile [role="checkbox"] {
+    position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; z-index: 1; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.95); background: rgba(0, 0, 0, 0.12); display: none;
+  }
+  body.selecting .tile [role="checkbox"] { display: block; }
+  .tile.sel [role="checkbox"] { display: block; top: 5px; left: 5px; background: var(--accent); border-color: #fff; }
+  .tile.sel [role="checkbox"]::after {
+    content: ""; position: absolute; left: 5px; top: 1.5px; width: 5px; height: 10px;
+    border: solid #fff; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg);
+  }
+  /* Centred in the space the panel leaves free. */
+  #empty { position: absolute; left: 0; right: 330px; top: 17%; display: none; text-align: center; color: var(--muted); }
+  #empty.show { display: block; }
+  #empty svg { width: 120px; height: 120px; margin: 0 auto 18px; }
+  #empty b { display: block; font-size: 22px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
+
+  /* The confirm dialog, centred in the viewport. */
+  .scrim { position: fixed; inset: 0; z-index: 5; background: rgba(32, 33, 36, 0.4); }
+  .dlg {
+    position: fixed; z-index: 6; left: 50%; top: 50%; width: 400px; transform: translate(-50%, -50%);
+    padding: 24px 24px 18px; border-radius: 24px; background: #fff; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  }
+  .dlg h2 { margin: 0 0 12px; font-size: 22px; font-weight: 500; }
+  .dlg p { margin: 0 0 22px; color: var(--muted); }
+  .dlg .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .dlg button { height: 40px; padding: 0 16px; border: 0; border-radius: 20px; background: transparent; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+
+  @media (max-width: 900px) {
+    #nav, .brand span { display: none; }
+    .brand { width: auto; }
+    #main { left: 0; padding-left: 12px; }
+  }
+
+  /* Panel-only pictures: after the run, only the panel is drawn. */
+  html.panel-only, html.panel-only body { background: transparent; }
+  html.panel-only #app { visibility: hidden; }
+  html.panel-only #bulk-delete-for-google-photos {
+    left: 40px !important; top: 32px !important; right: auto !important; bottom: auto !important;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="topbar"></header>
+
+  <nav id="nav" aria-label="Sections">
+    <a class="active" href="#photos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/></svg>Photos</a>
+    <a href="#explore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>Explore</a>
+    <a href="#sharing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.3-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.8a3.5 3.5 0 0 1 0 6.4M18.5 14.8c1.6.8 2.6 2.5 3 5.2"/></svg>Sharing</a>
+    <a href="#albums"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="14" height="14" rx="2.5"/><path d="M7 3h11.5A2.5 2.5 0 0 1 21 5.5V17"/></svg>Albums</a>
+    <a href="#archive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9M10 13h4"/></svg>Archive</a>
+    <a href="#trash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/></svg>Trash</a>
+    <div class="storage">
+      <b>Storage</b>
+      <div class="meter"><span></span></div>
+      14.1 GB of 15 GB used
+    </div>
+  </nav>
+
+  <div role="main" id="main">
+    <div id="grid"></div>
+    <div id="empty">
+      <svg viewBox="0 0 120 120" fill="none" aria-hidden="true"><rect x="14" y="24" width="92" height="72" rx="12" fill="#eef2f8"/><circle cx="46" cy="50" r="9" fill="#cdd6e4"/><path d="M22 88l26-24 16 14 14-12 20 22" stroke="#cdd6e4" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <b>Your Library is empty</b>
+      Items in the trash stay there for 30 days.
+    </div>
+  </div>
+</div>
+
+<pre id="status" hidden>pending</pre>
+
+<script>window.BULK_DELETE_NO_AUTOMOUNT = true;</script>
+<script src="../../extension/remover.js"></script>
+<script src="tiles.js"></script>
+<script src="demo.js"></script>
+</body>
+</html>

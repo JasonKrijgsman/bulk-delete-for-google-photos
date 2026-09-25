@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jasonkrijgsman.github.io/bulk-delete-for-google-photos/sitemap.xml

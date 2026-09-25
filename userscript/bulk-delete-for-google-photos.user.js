@@ -1,3 +1,20 @@
+// ==UserScript==
+// @name         Bulk Delete for Google Photos
+// @namespace    https://github.com/JasonKrijgsman/bulk-delete-for-google-photos
+// @version      1.1.0
+// @description  Moves the photos in your Google Photos library to the trash in bulk. Free, no daily limit, nothing leaves your browser.
+// @match        https://photos.google.com/*
+// @grant        none
+// @run-at       document-idle
+// @noframes
+// @license      MIT
+// @homepageURL  https://github.com/JasonKrijgsman/bulk-delete-for-google-photos
+// @supportURL   https://github.com/JasonKrijgsman/bulk-delete-for-google-photos/issues
+// @icon         https://raw.githubusercontent.com/JasonKrijgsman/bulk-delete-for-google-photos/main/extension/icons/icon48.png
+// @downloadURL  https://github.com/JasonKrijgsman/bulk-delete-for-google-photos/releases/latest/download/bulk-delete-for-google-photos.user.js
+// @updateURL    https://github.com/JasonKrijgsman/bulk-delete-for-google-photos/releases/latest/download/bulk-delete-for-google-photos.user.js
+// ==/UserScript==
+
 /*
  * Bulk Delete for Google Photos
  *

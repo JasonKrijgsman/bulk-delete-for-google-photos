@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bulk Delete for Google Photos: images</title>
+<!--
+  Layouts for the rendered images. scripts/render-images.mjs opens this page
+  with ?kind=panel, store, og or promo. The demo library runs inside a fixed
+  1200 by 632 frame, so every run sees the same grid and takes the same time.
+-->
+<style>
+  * { box-sizing: border-box; }
+  :root { color-scheme: light; }
+  html, body { margin: 0; }
+  body {
+    position: relative; overflow: hidden; color: #1f1f1f;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  iframe { display: block; border: 0; width: 1200px; height: 632px; }
+  svg { display: block; }
+  .warm { background: radial-gradient(900px 520px at 88% -8%, #fcd9d3 0%, rgba(252, 217, 211, 0) 70%), linear-gradient(180deg, #fff8f6 0%, #fbeae6 100%); }
+
+  /* kind=panel: the frame alone, on a transparent page. */
+  body.panel { width: 1200px; height: 632px; background: transparent; }
+  body.panel iframe { position: absolute; left: 0; top: 0; background: transparent; }
+
+  /* kind=store: 1280 by 800, a caption above a window that rises from the bottom edge. */
+  body.store { width: 1280px; height: 800px; }
+  .store .head { position: absolute; left: 64px; top: 34px; right: 64px; height: 110px; display: flex; align-items: center; gap: 26px; }
+  .store .head img { width: 88px; height: 88px; flex: none; border-radius: 20px; box-shadow: 0 6px 18px rgba(155, 35, 25, 0.25); }
+  .store h1 { margin: 0; font-size: 44px; line-height: 1.08; font-weight: 750; letter-spacing: -0.6px; }
+  .store p { margin: 10px 0 0; font-size: 22px; line-height: 1.3; color: #4a3f3d; }
+  .store .window {
+    position: absolute; left: 40px; top: 168px; width: 1200px; height: 632px; overflow: hidden;
+    border-radius: 14px 14px 0 0; background: #fff;
+    box-shadow: 0 0 0 1px rgba(60, 20, 10, 0.1), 0 -4px 36px rgba(120, 30, 20, 0.16);
+  }
+
+  /* kind=og: 1200 by 630 share card. */
+  body.og { width: 1200px; height: 630px; }
+  .og .text { position: absolute; left: 72px; top: 70px; width: 560px; }
+  .og .text img { width: 96px; height: 96px; border-radius: 22px; box-shadow: 0 8px 20px rgba(155, 35, 25, 0.25); }
+  .og h1 { margin: 34px 0 0; font-size: 62px; line-height: 1.02; font-weight: 800; letter-spacing: -1.2px; }
+  .og .promise { margin: 22px 0 0; font-size: 27px; line-height: 1.32; color: #3d3533; }
+  .og .where { margin: 26px 0 0; font-size: 21px; color: #8a4b43; font-weight: 600; }
+  .og .mosaic { position: absolute; left: 676px; top: -26px; display: grid; grid-template-columns: repeat(4, 128px); gap: 10px; transform: rotate(-4deg); }
+  .og .panel-shot { position: absolute; right: 44px; bottom: 30px; width: 400px; filter: drop-shadow(0 18px 30px rgba(40, 10, 5, 0.35)); }
+
+  .tile { position: relative; width: 128px; height: 128px; border-radius: 14px; overflow: hidden; }
+  .tile.sel { box-shadow: inset 0 0 0 5px #2563eb; }
+  .tile.sel::before {
+    content: ""; position: absolute; left: 9px; top: 9px; width: 26px; height: 26px; border-radius: 50%;
+    background: #2563eb; box-shadow: 0 0 0 2px #fff;
+  }
+  .tile.sel::after {
+    content: ""; position: absolute; left: 18.5px; top: 13px; width: 6px; height: 12px;
+    border: solid #fff; border-width: 0 3px 3px 0; transform: rotate(45deg);
+  }
+
+  /* kind=promo: 440 by 280 small promo tile. */
+  body.promo { width: 440px; height: 280px; background: linear-gradient(135deg, #de4235 0%, #b3261e 55%, #8c1d16 100%); color: #fff; }
+  .promo .mosaic { position: absolute; left: 250px; top: -34px; display: grid; grid-template-columns: repeat(3, 84px); gap: 10px; transform: rotate(-8deg); }
+  .promo .mosaic .tile { width: 84px; height: 84px; border-radius: 14px; background: rgba(255, 255, 255, 0.13); }
+  .promo .mosaic .tile.sel { box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.55); background: rgba(255, 255, 255, 0.2); }
+  .promo .mosaic .tile.sel::before { background: #fff; box-shadow: none; }
+  .promo .mosaic .tile.sel::after { border-color: #b3261e; }
+  .promo .mark { position: absolute; left: 34px; top: 38px; width: 76px; height: 76px; }
+  .promo .words { position: absolute; left: 34px; top: 132px; }
+  .promo .name { margin: 0; font-size: 40px; line-height: 1; font-weight: 800; letter-spacing: -0.8px; }
+  .promo .sub { margin: 6px 0 0; font-size: 23px; line-height: 1.1; font-weight: 600; }
+  .promo .free { margin: 16px 0 0; font-size: 17px; font-weight: 600; color: rgba(255, 255, 255, 0.88); }
+</style>
+</head>
+<body>
+<pre id="status" hidden>pending</pre>
+<script src="tiles.js"></script>
+<script>
+(function () {
+  'use strict';
+  const params = new URLSearchParams(location.search);
+  const kind = params.get('kind') || 'store';
+  const status = document.getElementById('status');
+  document.body.classList.add(kind);
+
+  function el(tag, attrs, children) {
+    const node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) { node.setAttribute(key, attrs[key]); });
+    [].concat(children === undefined ? [] : children).forEach(function (child) { node.append(child); });
+    return node;
+  }
+
+  function report(extra) {
+    status.textContent = JSON.stringify(Object.assign({ kind: kind }, extra));
+  }
+
+  // The demo frame reports its state with postMessage when it is ready.
+  // The photos and ticked parameters pass through to it.
+  function demoFrame(query, frameX, frameY) {
+    ['photos', 'ticked'].forEach(function (key) {
+      if (params.has(key)) query += '&' + key + '=' + encodeURIComponent(params.get(key));
+    });
+    const frame = el('iframe', { src: 'demo.html?' + query, title: 'Demo library' });
+    window.addEventListener('message', function (event) {
+      const data = event.data;
+      if (!data || data.source !== 'bulk-delete-demo') return;
+      report({ frame: { x: frameX, y: frameY }, demo: data.status });
+    });
+    return frame;
+  }
+
+  // Waits for every image on the page to load, then reports. It listens for
+  // the load event and not for decode(): headless Chrome holds its virtual
+  // clock while a file loads, but not while an image decodes.
+  function whenImagesReady() {
+    const images = Array.prototype.slice.call(document.images);
+    Promise.all(images.map(function (img) {
+      return new Promise(function (resolve) {
+        if (img.complete) { resolve(); return; }
+        img.addEventListener('load', resolve);
+        img.addEventListener('error', resolve);
+      });
+    })).then(function () {
+      const broken = images.filter(function (img) { return !img.naturalWidth; });
+      report({
+        ok: broken.length === 0,
+        images: images.map(function (img) { return img.getAttribute('src') + ' ' + img.naturalWidth + 'x' + img.naturalHeight; })
+      });
+    });
+  }
+
+  // A grid of tiles. With a seed they get gradient "photos"; without, the
+  // stylesheet colours them. The tiles listed in `ticked` show a check mark.
+  function mosaic(count, ticked, seed) {
+    const next = seed ? window.DemoTiles.create(seed) : null;
+    const grid = el('div', { class: 'mosaic', 'aria-hidden': 'true' });
+    for (let i = 0; i < count; i++) {
+      const tile = el('div', { class: ticked.indexOf(i) === -1 ? 'tile' : 'tile sel' });
+      if (next) tile.style.background = next();
+      grid.append(tile);
+    }
+    return grid;
+  }
+
+  // The trash can from the extension icon, drawn in white.
+  function trashMark() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '26 20 76 88');
+    svg.setAttribute('class', 'mark');
+    svg.setAttribute('aria-hidden', 'true');
+    const defs = document.createElementNS(ns, 'defs');
+    const mask = document.createElementNS(ns, 'mask');
+    mask.setAttribute('id', 'slots');
+    [['rect', { x: '0', y: '0', width: '128', height: '128', fill: '#fff' }],
+      ['rect', { x: '49', y: '58', width: '6', height: '36', rx: '3', fill: '#000' }],
+      ['rect', { x: '61', y: '58', width: '6', height: '36', rx: '3', fill: '#000' }],
+      ['rect', { x: '73', y: '58', width: '6', height: '36', rx: '3', fill: '#000' }]].forEach(function (s) {
+      const node = document.createElementNS(ns, s[0]);
+      Object.keys(s[1]).forEach(function (k) { node.setAttribute(k, s[1][k]); });
+      mask.appendChild(node);
+    });
+    defs.appendChild(mask);
+    svg.appendChild(defs);
+    const g = document.createElementNS(ns, 'g');
+    g.setAttribute('fill', '#fff');
+    g.setAttribute('mask', 'url(#slots)');
+    [['rect', { x: '53', y: '24', width: '22', height: '12', rx: '4' }],
+      ['rect', { x: '30', y: '34', width: '68', height: '10', rx: '4' }],
+      ['path', { d: 'M40 48h48a4 4 0 0 1 4 4.4l-5 47.6a5 5 0 0 1-5 4H46a5 5 0 0 1-5-4l-5-47.6A4 4 0 0 1 40 48z' }]
+    ].forEach(function (s) {
+      const node = document.createElementNS(ns, s[0]);
+      Object.keys(s[1]).forEach(function (k) { node.setAttribute(k, s[1][k]); });
+      g.appendChild(node);
+    });
+    svg.appendChild(g);
+    return svg;
+  }
+
+  const CAPTIONS = {
+    1: {
+      state: 'idle',
+      title: 'Clear out Google Photos in bulk',
+      text: 'It moves every photo in your Library or Archive to the trash for you. Free, with no daily limit.'
+    },
+    2: {
+      state: 'running',
+      title: 'It does the clicking for you',
+      text: 'It ticks the photos, checks the count Google shows and moves them to the trash, 250 at a time.'
+    },
+    3: {
+      state: 'done',
+      title: 'It never empties the trash',
+      text: 'Your photos stay in the trash for 30 days, and you can restore them until then.'
+    }
+  };
+
+  if (kind === 'panel') {
+    document.body.append(demoFrame('state=' + encodeURIComponent(params.get('state') || 'idle') + '&only=panel', 0, 0));
+  } else if (kind === 'store') {
+    const caption = CAPTIONS[params.get('n')] || CAPTIONS[1];
+    document.body.classList.add('warm');
+    document.body.append(
+      el('div', { class: 'head' }, [
+        el('img', { src: '../../extension/icons/icon128.png', alt: '' }),
+        el('div', {}, [el('h1', {}, caption.title), el('p', {}, caption.text)])
+      ]),
+      el('div', { class: 'window' }, demoFrame('state=' + caption.state, 40, 168))
+    );
+  } else if (kind === 'og') {
+    document.body.classList.add('warm');
+    document.body.append(
+      mosaic(20, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 11),
+      el('div', { class: 'text' }, [
+        el('img', { src: '../../extension/icons/icon128.png', alt: '' }),
+        el('h1', {}, 'Bulk Delete for Google Photos'),
+        el('p', { class: 'promise' }, 'Move thousands of photos to the trash in minutes. Free, open source, no daily limit.'),
+        el('p', { class: 'where' }, 'For Chrome, Edge, Brave and Firefox')
+      ]),
+      el('img', { class: 'panel-shot', src: '../../docs/images/panel-done.png', alt: '' })
+    );
+    whenImagesReady();
+  } else if (kind === 'promo') {
+    document.body.append(
+      mosaic(12, [0, 1, 3, 4, 6], 0),
+      trashMark(),
+      el('div', { class: 'words' }, [
+        el('p', { class: 'name' }, 'Bulk Delete'),
+        el('p', { class: 'sub' }, 'for Google Photos'),
+        el('p', { class: 'free' }, 'Free. No daily limit.')
+      ])
+    );
+    whenImagesReady();
+  }
+})();
+</script>
+</body>
+</html>

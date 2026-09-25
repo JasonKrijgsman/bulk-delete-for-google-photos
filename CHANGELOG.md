@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0 (2026-09-25)
+
+- The extension has a toolbar button. It opens Google Photos in a new tab. On a Google Photos tab it shows the panel instead, also after you hid it.
+- The tab title shows the progress, such as "[Bulk Delete: 1,250 moved]", so you can follow a run from the tab strip.
+- While it runs, the panel shows the speed. When it ends, the panel shows how long the run took. Counts use a thousands separator, such as 2,903.
+- New: a userscript for Firefox and any other browser with a userscript manager, such as Violentmonkey or Tampermonkey. It is `remover.js` with a userscript header, and the manager can keep it up to date.
+- Download links that always point to the newest release: `releases/latest/download/bulk-delete-for-google-photos.zip` for the extension and `releases/latest/download/bulk-delete-for-google-photos.user.js` for the userscript. The ZIP with the version in its name stays, and each ZIP has a SHA-256 file.
+- Bug reports and feature requests use forms. The bug form asks for the browser, how you installed it, the interface language, what the panel said and its log lines.
+- The README has a quick start, an FAQ and more help for when it stops.
+- The panel and the README now say photos stay in the trash for 30 days. Google cut that from 60 days on 4 September 2026.
+
 ## 1.0.0 (2026-09-25)
 
 - First release.

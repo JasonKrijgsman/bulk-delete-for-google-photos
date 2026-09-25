@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest an idea, or ask for better support of your language.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. Some are out of scope on purpose, to keep your photos and your data safe:
+
+        - emptying the trash, or deleting anything for good
+        - network requests, tracking, accounts or payments
+        - extra browser permissions
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The problem you want solved, in your own words.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work?
+      description: Optional. Your idea for the panel or the steps.
+
+  - type: input
+    id: language
+    attributes:
+      label: Google Photos interface language
+      description: Optional. Fill this in when the idea is about a language.
+      placeholder: English (United States)
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Optional. Links, screenshots or examples. Hide your email address and your photos first.

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Website, install steps and answers
+    url: https://jasonkrijgsman.github.io/bulk-delete-for-google-photos/
+    about: How to install and use it, and answers to common questions.
+  - name: Troubleshooting
+    url: https://github.com/JasonKrijgsman/bulk-delete-for-google-photos#troubleshooting
+    about: What each message in the panel means, and what to do.

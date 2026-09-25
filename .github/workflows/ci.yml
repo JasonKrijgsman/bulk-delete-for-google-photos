@@ -1,8 +1,16 @@
 name: ci
 
-# Tests on every push and pull request. On a v* tag it also zips the extension
-# folder and attaches it to the release, so the download on the Releases page
-# is always built from the tagged source.
+# Tests on every push and pull request. On a v* tag it also builds the release
+# from the tagged source and attaches it:
+#
+#   bulk-delete-for-google-photos.zip             the extension folder
+#   bulk-delete-for-google-photos-vX.Y.Z.zip      the same, with the version
+#   a .sha256 file for each ZIP
+#   bulk-delete-for-google-photos.user.js         the userscript
+#
+# The README, the website and the userscript's update URL link to
+# releases/latest/download/ with the names that have no version in them.
+# Never rename those assets.
 
 on:
   push:
@@ -46,6 +54,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Tag matches the manifest version
         run: |
           version=$(node -p "require('./extension/manifest.json').version")
@@ -54,19 +66,72 @@ jobs:
             exit 1
           fi
 
+      # The test job already checks that the committed userscript is up to
+      # date. Building it again means the release carries exactly what the
+      # tagged source produces.
+      - name: Build the userscript
+        run: |
+          node scripts/build-userscript.mjs
+          if [ -n "$(git status --porcelain -- userscript/)" ]; then
+            echo "The committed userscript is out of date. Run npm run build:userscript and commit it."
+            git status --porcelain -- userscript/
+            exit 1
+          fi
+
       - name: Zip the extension
         run: |
-          cd extension
-          zip -r "../bulk-delete-for-google-photos-$GITHUB_REF_NAME.zip" .
-          cd ..
-          sha256sum "bulk-delete-for-google-photos-$GITHUB_REF_NAME.zip" > "bulk-delete-for-google-photos-$GITHUB_REF_NAME.zip.sha256"
+          stable="bulk-delete-for-google-photos.zip"
+          versioned="bulk-delete-for-google-photos-$GITHUB_REF_NAME.zip"
+          (cd extension && zip -r "../$versioned" .)
+          cp "$versioned" "$stable"
+          sha256sum "$stable" > "$stable.sha256"
+          sha256sum "$versioned" > "$versioned.sha256"
+
+      - name: Write the release notes
+        run: |
+          cat > notes.md <<'EOF'
+          ## Install
+
+          **Chrome, Edge, Brave and other Chromium browsers**
+
+          1. Download `bulk-delete-for-google-photos.zip` below and unzip it.
+          2. Open `chrome://extensions` (`edge://extensions` in Edge, `brave://extensions` in Brave).
+          3. Turn on **Developer mode**.
+          4. Click **Load unpacked** and pick the unzipped folder.
+
+          To update, unzip the new ZIP over the old folder. Then click the reload arrow on the extension's card.
+
+          **Firefox, or any browser with a userscript manager**
+
+          1. Install a userscript manager, such as Violentmonkey or Tampermonkey.
+          2. Click `bulk-delete-for-google-photos.user.js` below. The manager offers to install it and can keep it up to date.
+
+          Then open photos.google.com. The panel is at the bottom right. It only moves photos to the trash. You empty the trash yourself.
+
+          The ZIP with the version in its name holds the same files. Each ZIP has a `.sha256` file to check the download. Help and answers: https://jasonkrijgsman.github.io/bulk-delete-for-google-photos/
+          EOF
+          # The CHANGELOG.md section of this version, without its heading.
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## $version" '
+            index($0, "## ") == 1 { if (found) exit; found = ($0 == heading || index($0, heading " ") == 1); next }
+            found
+          ' CHANGELOG.md | sed '/./,$!d' > changes.md
+          if [ -s changes.md ]; then
+            { echo; echo "## Changes"; echo; cat changes.md; } >> notes.md
+          else
+            printf '\nChanges are in CHANGELOG.md.\n' >> notes.md
+          fi
+          cat notes.md
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
+            bulk-delete-for-google-photos.zip \
+            bulk-delete-for-google-photos.zip.sha256 \
             "bulk-delete-for-google-photos-$GITHUB_REF_NAME.zip" \
             "bulk-delete-for-google-photos-$GITHUB_REF_NAME.zip.sha256" \
+            userscript/bulk-delete-for-google-photos.user.js \
             --title "$GITHUB_REF_NAME" \
-            --notes "Unzip, open chrome://extensions, turn on Developer mode, click Load unpacked and pick the unzipped folder. Changes are in CHANGELOG.md."
+            --notes-file notes.md

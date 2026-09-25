@@ -210,7 +210,7 @@ test('buttons that empty the trash or delete for good are recognised, the normal
 });
 
 test('a body line about how the trash works does not block the dialog, a delete-for-good line does', () => {
-  assert.equal(FPR.bodyForbidden('Items in the trash are permanently deleted after 60 days.'), false);
+  assert.equal(FPR.bodyForbidden('Items in the trash are permanently deleted after 30 days.'), false);
   assert.equal(FPR.bodyForbidden('Er komt dan 72,4 MB vrij in de opslag in je Google-account.'), false);
   assert.equal(FPR.bodyForbidden('जगह खाली हो जाएगी'), false, 'an emptying word alone is fine');
   assert.equal(FPR.bodyForbidden('Depolama alanı boşaltılacak'), false, 'an emptying word alone is fine');
@@ -505,7 +505,42 @@ test('version numbers agree', () => {
   assert.equal(pkg.version, FPR.VERSION);
 });
 
+test('numbers and times read well in the panel', () => {
+  assert.equal(FPR.formatNumber(2903), '2,903');
+  assert.equal(FPR.formatNumber(250), '250');
+  assert.equal(FPR.formatNumber(1234567), '1,234,567');
+  assert.equal(FPR.formatDuration(4000), '4 s');
+  assert.equal(FPR.formatDuration(240000), '4 min');
+});
+
+test('the toolbar button shows the panel on Google Photos and opens Google Photos elsewhere', async () => {
+  const background = require('../extension/background.js');
+  const calls = [];
+  const onPhotos = {
+    tabs: {
+      sendMessage: async (id, message) => { calls.push(['send', id, message.type]); return { ok: true }; },
+      create: async (props) => { calls.push(['create', props.url]); }
+    }
+  };
+  await background.onToolbarClick({ id: 7 }, onPhotos);
+  assert.deepEqual(calls, [['send', 7, 'bulk-delete:show']]);
+  calls.length = 0;
+  const elsewhere = {
+    tabs: {
+      sendMessage: async () => { throw new Error('Receiving end does not exist.'); },
+      create: async (props) => { calls.push(['create', props.url]); }
+    }
+  };
+  await background.onToolbarClick({ id: 8 }, elsewhere);
+  assert.deepEqual(calls, [['create', 'https://photos.google.com/']]);
+});
+
 test('the extension asks for no permissions and runs only on Google Photos', () => {
+  assert.equal(manifest.background.service_worker, 'background.js');
+  assert.ok(fs.existsSync(path.join(root, 'extension', 'background.js')));
+  const backgroundSource = fs.readFileSync(path.join(root, 'extension', 'background.js'), 'utf8');
+  ['fetch(', 'XMLHttpRequest', 'sendBeacon', 'WebSocket'].forEach((needle) =>
+    assert.ok(!backgroundSource.includes(needle), 'background.js contains ' + needle));
   assert.equal(manifest.permissions, undefined);
   assert.equal(manifest.host_permissions, undefined);
   assert.equal(manifest.content_scripts.length, 1);
