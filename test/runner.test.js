@@ -209,6 +209,17 @@ test('buttons that empty the trash or delete for good are recognised, the normal
   assert.ok(!FPR.forbidden(realDutchDialog), 'the real Dutch trash dialog is allowed');
 });
 
+test('a body line about how the trash works does not block the dialog, a delete-for-good line does', () => {
+  assert.equal(FPR.bodyForbidden('Items in the trash are permanently deleted after 60 days.'), false);
+  assert.equal(FPR.bodyForbidden('Er komt dan 72,4 MB vrij in de opslag in je Google-account.'), false);
+  assert.equal(FPR.bodyForbidden('जगह खाली हो जाएगी'), false, 'an emptying word alone is fine');
+  assert.equal(FPR.bodyForbidden('Depolama alanı boşaltılacak'), false, 'an emptying word alone is fine');
+  assert.equal(FPR.bodyForbidden('These photos will be deleted permanently.'), true);
+  assert.equal(FPR.bodyForbidden('Empty trash now?'), true);
+  // In a title or on a button, the strict rule applies even next to a trash word.
+  assert.equal(FPR.forbidden('Permanently delete from trash?'), true);
+});
+
 test('moves exactly the requested number, in batches no larger than asked', async () => {
   const lib = fakeLibrary({ total: 100 });
   const res = await runnerFor(lib, { batchSize: 3 }).run(7);

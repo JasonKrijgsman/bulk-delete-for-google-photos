@@ -68,6 +68,16 @@
     return PERMANENT_WORDS.test(t) || (EMPTY_WORDS.test(t) && TRASH_WORDS.test(t));
   }
 
+  // The same rule for one piece of a dialog's body text. A body line may say
+  // that the trash deletes for good after 60 days, so there a word for "for
+  // good" only counts when the same piece does not also name the trash.
+  // Titles and buttons use the strict rule above.
+  function bodyForbidden(text) {
+    const t = String(text || '');
+    if (EMPTY_WORDS.test(t) && TRASH_WORDS.test(t)) return true;
+    return PERMANENT_WORDS.test(t) && !TRASH_WORDS.test(t);
+  }
+
   const MESSAGES = {
     'unsupported-page': 'Open your Photos library or your Archive first.',
     'no-account': 'Could not see which Google account is signed in. Reload the page, then start again.',
@@ -159,7 +169,7 @@
       poll: 100,
       stepTimeout: 15000,
       barTimeout: 8000,
-      dialogSettle: 500,
+      dialogSettle: 1500,
       trashTimeout: 120000,
       effectTimeout: 15000,
       emptyQuiet: 5000,
@@ -715,15 +725,37 @@
       return found;
     }
 
-    // The "N selected" text, skipping any number that was already in the
-    // top bar before the run ticked anything.
+    // A number that was already in the top bar before the run ticked
+    // anything, such as a badge, by its text and place. Google may draw it
+    // again as a new element, so the element itself is no proof.
+    function inBaseline(candidate) {
+      const r = candidate.el.getBoundingClientRect();
+      const text = (candidate.el.textContent || '').trim();
+      return baseline.some(function (b) {
+        return b.text === text && Math.abs(b.x - r.left) <= 4 && Math.abs(b.y - r.top) <= 4;
+      });
+    }
+
+    // The "N selected" text: skip what was there before the run, and prefer
+    // the text that sits closest to the trash button in the page.
     function countElement() {
-      const found = countCandidates().filter(function (c) { return baseline.indexOf(c.el) === -1; });
-      return found.length ? found[0] : null;
+      const found = countCandidates().filter(function (c) { return !inBaseline(c); });
+      if (!found.length) return null;
+      const trash = findTrashButton();
+      if (trash) {
+        for (let el = trash.parentElement; el && el !== doc.body; el = el.parentElement) {
+          const near = found.filter(function (c) { return el.contains(c.el); });
+          if (near.length) return near[0];
+        }
+      }
+      return found[0];
     }
 
     function markBaseline() {
-      baseline = findTrashButton() ? [] : countCandidates().map(function (c) { return c.el; });
+      baseline = findTrashButton() ? [] : countCandidates().map(function (c) {
+        const r = c.el.getBoundingClientRect();
+        return { text: (c.el.textContent || '').trim(), x: r.left, y: r.top };
+      });
     }
 
     function selectionCount() {
@@ -791,15 +823,22 @@
     }
 
     // A dialog whose own text speaks of emptying the trash or of deleting
-    // for good is never confirmed, whatever its buttons say. The text pieces
-    // are joined with spaces: the browser runs "Cancel" and "Empty trash"
-    // together into "CancelEmpty trash", which hides the word "empty".
+    // for good is never confirmed, whatever its buttons say. Each piece of
+    // text is judged on its own, so words from the body and a button never
+    // combine: the browser runs "Cancel" and "Empty trash" together into
+    // "CancelEmpty trash". The title and the buttons get the strict rule.
     function dialogForbidden(dialog) {
-      const parts = [];
+      const titleId = dialog.getAttribute('aria-labelledby');
+      const title = titleId ? doc.getElementById(titleId) : null;
       const walker = doc.createTreeWalker(dialog, 4); // 4: text nodes only
-      while (walker.nextNode()) parts.push(walker.currentNode.data);
-      buttonsIn(dialog).forEach(function (b) { parts.push(labelOf(b)); });
-      return forbidden(parts.join(' '));
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const parent = node.parentElement;
+        const strict = !!parent && (!!parent.closest('h1, h2, h3, h4, h5, h6, [role="heading"]') ||
+          !!(title && title.contains(parent)));
+        if (strict ? forbidden(node.data) : bodyForbidden(node.data)) return true;
+      }
+      return buttonsIn(dialog).some(function (b) { return forbidden(labelOf(b)); });
     }
 
     // Google's accept code finds the confirm button in any language, but only
@@ -1299,6 +1338,7 @@
     MESSAGES: MESSAGES,
     RunError: RunError,
     forbidden: forbidden,
+    bodyForbidden: bodyForbidden,
     parseCount: parseCount,
     parseLimit: parseLimit,
     createStore: createStore,

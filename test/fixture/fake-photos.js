@@ -59,7 +59,7 @@
       trashDelay: 150, barDelay: 0, plainDialog: false, rtl: false, accountName: 'Test User',
       emptyTrashButton: false, evilDialog: false, twoDialogs: false, noCount: false,
       navigateAfterBatches: 0, path: '/', badge: false, promoBeforeConfirm: false, permanentDialog: false,
-      acceptOnly: false
+      acceptOnly: false, badgeRedraw: false, promoLead: 300, retentionNote: false
     }, options);
     fx.photos = [];
     for (let i = 0; i < fx.total; i++) {
@@ -75,17 +75,21 @@
       promoClicks: 0, notifClicks: 0, clicksByPhoto: {}
     });
     if (fx.promo) document.body.appendChild(el('div', { role: 'dialog', 'aria-modal': 'true', class: 'dlg' }, 'Your storage is full'));
-    // badge: a number with a word next to a header button, in both modes.
-    topright.replaceChildren();
-    if (fx.badge) {
-      const notifications = el('button', { 'aria-label': 'Notifications' });
-      notifications.addEventListener('click', () => { fx.notifClicks++; });
-      topright.append(notifications, el('span', {}, '3 new'));
-    }
+    drawBadge();
     topbar.dir = fx.rtl ? 'rtl' : 'ltr';
     main.scrollTop = 0;
     renderTop();
     renderGrid(true);
+  }
+
+  // badge: a number with a word next to a header button, in both modes.
+  // badgeRedraw: Google draws it again as new elements whenever the bar changes.
+  function drawBadge() {
+    topright.replaceChildren();
+    if (!fx.badge && !fx.badgeRedraw) return;
+    const notifications = el('button', { 'aria-label': 'Notifications' });
+    notifications.addEventListener('click', () => { fx.notifClicks++; });
+    topright.append(notifications, el('span', {}, '3 new'));
   }
 
   function layout() {
@@ -171,6 +175,7 @@
 
   function renderTop() {
     const L = LABELS[fx.lang];
+    if (fx.badgeRedraw) drawBadge();
     topbar.replaceChildren();
     if (fx.selected.size) {
       // With barDelay, the selection bar waits above the page before it slides
@@ -226,7 +231,7 @@
       yes.addEventListener('click', () => { fx.promoClicks++; promo.remove(); });
       promo.append(el('h2', {}, 'Running out of space?'), no, yes);
       document.body.appendChild(promo);
-      setTimeout(openConfirm, 300);
+      setTimeout(openConfirm, fx.promoLead);
       return;
     }
     openConfirm();
@@ -249,7 +254,10 @@
       closeDialog();
       moveSelectedToTrash();
     });
-    d.append(el('h2', {}, title), cancel, ok);
+    d.append(el('h2', {}, title));
+    // retentionNote: a body line about how long the trash keeps photos.
+    if (fx.retentionNote) d.append(el('p', {}, 'Items in the trash are permanently deleted after 60 days.'));
+    d.append(cancel, ok);
     document.body.appendChild(d);
     fx.dialog = d;
     if (fx.twoDialogs) {
@@ -369,6 +377,13 @@
       { limit: 5 }, { error: 'unexpected-dialog', removed: 0, confirmClicks: 0, promoClicks: 0 });
     await add('A dialog with an accept code but no cancel code is not confirmed', { total: 20, acceptOnly: true },
       { limit: 5 }, { error: 'no-confirm-button', removed: 0, promoClicks: 0, selectedLeft: 0 });
+    await add('A pop-up that opens 0.8 s before the confirm dialog: nothing is confirmed',
+      { total: 20, promoBeforeConfirm: true, promoLead: 800 }, { limit: 5 },
+      { error: 'unexpected-dialog', removed: 0, confirmClicks: 0, promoClicks: 0 });
+    await add('A body line about how long the trash keeps photos does not block the dialog',
+      { total: 20, retentionNote: true }, { limit: 5 }, { trashed: 5, removed: 5, reason: 'limit', error: null });
+    await add('A badge that Google draws again is still not a selection', { total: 30, badgeRedraw: true },
+      { limit: 20, batchSize: 10 }, { trashed: 20, removed: 20, reason: 'limit', error: null, notifClicks: 0 });
     await add('A number badge in the top bar is not a selection', { total: 20, badge: true }, { limit: 10 },
       { trashed: 10, removed: 10, reason: 'limit', error: null, notifClicks: 0 });
     await add('The real default timings', { total: 30 }, { limit: 12, batchSize: 5, defaults: true },
